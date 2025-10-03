@@ -15,6 +15,9 @@ dotenvy = "0.15"
 thiserror = "1.0"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde", "clock"] }
+base64 = "0.22"
+serde_urlencoded = "0.7"
+flate2 = "1.0"
 
 [dev-dependencies]
 serde_json = "1.0"
