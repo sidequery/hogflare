@@ -52,40 +52,29 @@ The emulator listens on `http://127.0.0.1:8088/`. Hogflare tests use this servic
 docker compose down --remove-orphans
 ```
 
-### Supported endpoints checklist
+### Endpoint coverage checklist
 
-- [x] `POST /capture`
-  - [x] Accept JSON payloads
-  - [x] Accept form-encoded payloads (`data=...`)
-  - [x] Honor `X-POSTHOG-API-KEY`
-  - [x] Honor `X-POSTHOG-SENT-AT`
-  - [x] Support `gzip`, `deflate`, `gzip-js` compressed data
-- [x] `POST /identify`
-  - [x] Forward `$identify` events
-  - [x] Apply shared API keys from headers or body
-- [x] `POST /groups`
-  - [x] Forward `$groupidentify`
-  - [x] Preserve group type/key metadata
-- [x] `POST /batch`
-  - [x] Mixed capture, identify, group, alias, engage events
-  - [x] Shared API key propagation to child events
-  - [x] Implicit compression fallback (`data`, `compression`)
-- [x] `POST /alias`
-  - [x] Forward `$create_alias`
-  - [x] Backfill alias metadata into `extra`
-- [x] `POST /engage`
-  - [x] Handle `$set`
-  - [x] Handle `$set_once`
-  - [x] Handle `$unset`
-  - [x] Handle `$group_set`
-- [x] `POST /decide`
-  - [x] Return placeholder flag response (200)
-  - [x] Surface configured project API key
-  - [x] Surface session recording proxy endpoint (if configured)
-- [x] `POST /s` / `POST /s/`
-  - [x] Validate HMAC signature when `POSTHOG_SIGNING_SECRET` is set
-  - [x] Forward `$snapshot` events to pipeline with chunk metadata
-- [x] `GET /healthz` – liveness probe
+- [x] Event capture `/capture` (JSON or form payloads, header/body API keys, gzip/deflate/gzip-js compression)
+- [x] Identify `/identify` (forwards `$identify`, applies shared API keys)
+- [x] Group updates `/groups` (handles `$groupidentify` with type and key metadata)
+- [x] Batch ingest `/batch` (mixed capture/identify/group/alias/engage payloads with compression fallback)
+- [x] Alias merge `/alias` (forwards `$create_alias`, backfills alias metadata into `extra`)
+- [x] People updates `/engage` (supports `$set`, `$set_once`, `$unset`, `$group_set`)
+- [x] Decide `/decide` (returns placeholder flag payload, surfaces project API key and session recording endpoint)
+- [x] Session recording `/s` (validates HMAC when configured, forwards `$snapshot` chunks)
+- [x] Health probe `/healthz` (simple liveness response)
+- [ ] Feature flag evaluation `/api/feature_flag/` (only placeholder `/decide`)
+- [ ] Cohorts, experiments, insights, funnels, trends, retention, breakdown, stickiness (`/api/cohort/`, `/api/insight/`, etc.)
+- [ ] Query endpoints (`/api/query/`, `/api/projects/:id/query/`) and HogQL
+- [ ] Plugin ingestion `/api/plugin/` (lifecycle events, scheduled tasks)
+- [ ] Background export jobs `/api/exports/` (CSV/Parquet exports)
+- [ ] Session replay file storage (snapshots proxied, no persistence)
+- [ ] Dashboard analytics (dashboards, annotations, alerts)
+- [ ] Webhooks and action-based notifications
+- [ ] Management endpoints (users, organizations, projects)
+- [ ] PostHog Cloud billing and license APIs
+
+Open a ticket if you need any of these proxied.
 
 All handlers return PostHog-compatible responses (`{"status": 1}` success, `{"status": 0}` failure).
 
