@@ -15,9 +15,11 @@ use serde_urlencoded;
 use thiserror::Error;
 use tracing::warn;
 
-use crate::models::ErrorResponse;
+use crate::models::{BatchRequest, ErrorResponse};
 
 pub struct PostHogPayload<T>(pub Vec<T>);
+
+pub struct PostHogBatchPayload(pub BatchRequest);
 
 #[derive(Debug, Error)]
 pub enum PayloadExtractorError {
@@ -74,6 +76,27 @@ where
     }
 }
 
+#[async_trait]
+impl<S> FromRequest<S, Body> for PostHogBatchPayload
+where
+    S: Send + Sync,
+{
+    type Rejection = PayloadExtractorError;
+
+    async fn from_request(request: Request<Body>, _state: &S) -> Result<Self, Self::Rejection> {
+        let (parts, body) = request.into_parts();
+        let headers = parts.headers;
+        let bytes = to_bytes(body, usize::MAX)
+            .await
+            .map_err(PayloadExtractorError::BodyRead)?;
+
+        let decoded = decode_content_encoding(&headers, &bytes)?;
+        let payload = parse_posthog_batch_body(&headers, &decoded)?;
+
+        Ok(PostHogBatchPayload(payload))
+    }
+}
+
 fn decode_content_encoding(
     headers: &HeaderMap,
     body: &[u8],
@@ -119,6 +142,34 @@ where
     }
 }
 
+fn parse_posthog_batch_body(
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<BatchRequest, PayloadExtractorError> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .to_ascii_lowercase()
+        });
+
+    let is_form = matches!(
+        content_type.as_deref(),
+        Some("application/x-www-form-urlencoded")
+    );
+
+    if is_form || body.starts_with(b"data=") {
+        parse_form_batch_payload(body)
+    } else {
+        parse_json_batch_payload(body)
+    }
+}
+
 fn parse_form_payload<T>(body: &[u8]) -> Result<Vec<T>, PayloadExtractorError>
 where
     T: DeserializeOwned,
@@ -143,6 +194,31 @@ where
     let data = data_value.ok_or(PayloadExtractorError::MissingData)?;
     let payloads = decode_data_value(data, compression.as_deref())?;
     deserialize_events(payloads, shared)
+}
+
+fn parse_form_batch_payload(body: &[u8]) -> Result<BatchRequest, PayloadExtractorError> {
+    let form_pairs: Vec<(String, String)> =
+        serde_urlencoded::from_bytes(body).map_err(PayloadExtractorError::Form)?;
+
+    let mut map = Map::new();
+    let mut data_value: Option<Value> = None;
+    let mut compression: Option<String> = None;
+
+    for (key, value) in form_pairs {
+        match key.as_str() {
+            "data" => data_value = Some(Value::String(value)),
+            "compression" | "compression_method" => compression = Some(value),
+            other => {
+                map.insert(other.to_string(), Value::String(value));
+            }
+        }
+    }
+
+    let data = data_value.ok_or(PayloadExtractorError::MissingData)?;
+    let content = decode_data_content(data, compression.as_deref())?;
+    apply_batch_data(content, &mut map)?;
+
+    serde_json::from_value(Value::Object(map)).map_err(PayloadExtractorError::Json)
 }
 
 fn parse_json_payload<T>(body: &[u8]) -> Result<Vec<T>, PayloadExtractorError>
@@ -179,13 +255,50 @@ where
     }
 }
 
+fn parse_json_batch_payload(body: &[u8]) -> Result<BatchRequest, PayloadExtractorError> {
+    let value: Value = serde_json::from_slice(body).map_err(PayloadExtractorError::Json)?;
+    match value {
+        Value::Object(mut map) => {
+            let compression = map
+                .remove("compression")
+                .or_else(|| map.remove("compression_method"));
+            if let Some(data) = map.remove("data") {
+                let compression_str = compression
+                    .as_ref()
+                    .and_then(|value| value.as_str())
+                    .map(|value| value.to_string());
+                let content = decode_data_content(data, compression_str.as_deref())?;
+                apply_batch_data(content, &mut map)?;
+            }
+
+            serde_json::from_value(Value::Object(map)).map_err(PayloadExtractorError::Json)
+        }
+        _ => Err(PayloadExtractorError::Structure(
+            "expected JSON object payload for batch endpoint",
+        )),
+    }
+}
+
 fn decode_data_value(
     data: Value,
     compression: Option<&str>,
 ) -> Result<Vec<Value>, PayloadExtractorError> {
-    match data {
+    match decode_data_content(data, compression)? {
         Value::Array(array) => Ok(array),
         Value::Object(map) => Ok(vec![Value::Object(map)]),
+        _ => Err(PayloadExtractorError::Structure(
+            "expected JSON object or array inside data field",
+        )),
+    }
+}
+
+fn decode_data_content(
+    data: Value,
+    compression: Option<&str>,
+) -> Result<Value, PayloadExtractorError> {
+    match data {
+        Value::Array(array) => Ok(Value::Array(array)),
+        Value::Object(map) => Ok(Value::Object(map)),
         Value::String(string) => decode_data_string(&string, compression),
         _ => Err(PayloadExtractorError::Structure(
             "expected JSON object or array inside data field",
@@ -196,7 +309,7 @@ fn decode_data_value(
 fn decode_data_string(
     data: &str,
     compression: Option<&str>,
-) -> Result<Vec<Value>, PayloadExtractorError> {
+) -> Result<Value, PayloadExtractorError> {
     let raw = BASE64_STANDARD
         .decode(data.as_bytes())
         .unwrap_or_else(|_| data.as_bytes().to_vec());
@@ -233,12 +346,52 @@ fn decode_data_string(
     }
 }
 
-fn convert_embedded_value(value: Value) -> Result<Vec<Value>, PayloadExtractorError> {
+fn convert_embedded_value(value: Value) -> Result<Value, PayloadExtractorError> {
+    match value {
+        Value::Array(_) | Value::Object(_) => Ok(value),
+        _ => Err(PayloadExtractorError::Structure(
+            "expected JSON object or array inside data field",
+        )),
+    }
+}
+
+fn apply_batch_data(
+    content: Value,
+    target: &mut Map<String, Value>,
+) -> Result<(), PayloadExtractorError> {
+    match content {
+        Value::Array(array) => {
+            target.insert("batch".to_string(), Value::Array(array));
+        }
+        Value::Object(mut object) => {
+            let batch_values = if let Some(batch_value) = object.remove("batch") {
+                normalize_batch_array(batch_value)?
+            } else {
+                vec![Value::Object(object.clone())]
+            };
+
+            target.insert("batch".to_string(), Value::Array(batch_values));
+
+            for (key, value) in object {
+                target.entry(key).or_insert(value);
+            }
+        }
+        _ => {
+            return Err(PayloadExtractorError::Structure(
+                "expected JSON object or array inside data field",
+            ))
+        }
+    }
+
+    Ok(())
+}
+
+fn normalize_batch_array(value: Value) -> Result<Vec<Value>, PayloadExtractorError> {
     match value {
         Value::Array(array) => Ok(array),
         Value::Object(map) => Ok(vec![Value::Object(map)]),
         _ => Err(PayloadExtractorError::Structure(
-            "expected JSON object or array inside data field",
+            "expected JSON array inside batch data",
         )),
     }
 }
@@ -289,6 +442,7 @@ mod tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{header, Request};
+    use chrono::TimeZone;
     use flate2::write::{GzEncoder, ZlibEncoder};
     use flate2::Compression;
     use serde_json::json;
@@ -459,5 +613,80 @@ mod tests {
         assert_eq!(payloads[0].event, "implicit-compression");
         assert_eq!(payloads[0].distinct_id, "json-user");
         assert_eq!(payloads[0].api_key.as_deref(), Some("phc_json_compressed"));
+    }
+
+    #[tokio::test]
+    async fn parses_json_batch_payload() {
+        let body = json!({
+            "api_key": "phc_batch",
+            "batch": [
+                {
+                    "event": "batched",
+                    "distinct_id": "batched-user"
+                }
+            ],
+            "sent_at": "2025-01-01T00:00:00Z"
+        })
+        .to_string();
+
+        let request = Request::builder()
+            .uri("/batch")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let PostHogBatchPayload(payload): PostHogBatchPayload =
+            PostHogBatchPayload::from_request(request, &())
+                .await
+                .unwrap();
+
+        assert_eq!(payload.api_key.as_deref(), Some("phc_batch"));
+        assert_eq!(payload.batch.len(), 1);
+        assert_eq!(payload.batch[0].event, "batched");
+        assert_eq!(payload.batch[0].distinct_id, "batched-user");
+    }
+
+    #[tokio::test]
+    async fn parses_compressed_batch_payload() {
+        let data_payload = json!({
+            "batch": [
+                {
+                    "event": "wrapped-batch",
+                    "distinct_id": "wrapped-user"
+                }
+            ],
+            "sent_at": "2025-02-02T00:00:00Z"
+        })
+        .to_string();
+
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(data_payload.as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+        let encoded = BASE64_STANDARD.encode(compressed);
+
+        let body = json!({
+            "data": encoded,
+            "compression": "gzip-js",
+            "api_key": "phc_wrapped_batch"
+        })
+        .to_string();
+
+        let request = Request::builder()
+            .uri("/batch")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap();
+
+        let PostHogBatchPayload(payload): PostHogBatchPayload =
+            PostHogBatchPayload::from_request(request, &())
+                .await
+                .unwrap();
+
+        assert_eq!(payload.api_key.as_deref(), Some("phc_wrapped_batch"));
+        assert_eq!(payload.batch.len(), 1);
+        assert_eq!(payload.batch[0].event, "wrapped-batch");
+        assert_eq!(payload.batch[0].distinct_id, "wrapped-user");
+        let expected = chrono::Utc.with_ymd_and_hms(2025, 2, 2, 0, 0, 0).unwrap();
+        assert_eq!(payload.sent_at, Some(expected));
     }
 }
