@@ -22,6 +22,7 @@ The server is configured through environment variables:
 | `CLOUDFLARE_PIPELINE_TIMEOUT_SECS` | `10` | Timeout (in seconds) applied to the pipeline HTTP client. |
 | `POSTHOG_API_KEY` | _optional_ | Default project API key returned from `/decide` when the client does not supply one. |
 | `POSTHOG_SESSION_RECORDING_ENDPOINT` | _optional_ | Session recording proxy target surfaced in `/decide` responses and used by the `/s` ingestion stub. |
+| `POSTHOG_SIGNING_SECRET` | _optional_ | Shared secret used to validate `X-POSTHOG-SIGNATURE`/`X-Hub-Signature` headers. When set, signatures are required. |
 
 Create a `.env` file with the required values:
 
@@ -117,8 +118,7 @@ Refer to the [Cloudflare Pipelines documentation](https://developers.cloudflare.
 
 Hogflare aims to be drop-in compatible with common PostHog SDK calls, but a few behaviours are still pending:
 
-* **Signed payload validation** – `X-POSTHOG-SIGNATURE` and `X-Hub-Signature` headers are currently ignored.
-* **Session recording storage** – `/s` acknowledges uploads but does not persist chunks anywhere; wire a downstream sink to enable replay.
+* **Session recording storage** – `/s` forwards snapshots to the pipeline, but replay still requires a downstream sink that understands the payload format.
 * **Feature flag resolution** – `/decide` returns static placeholders rather than running flag evaluation.
 * **Plugin / ingestion pipeline hooks** – PostHog plugins and data transformation hooks are not executed.
 * **Legacy endpoints** – older `/api/event/` and SDK-specific routes still proxy through `/capture`; add dedicated handlers if you rely on them.
