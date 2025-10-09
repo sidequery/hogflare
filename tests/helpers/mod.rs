@@ -2,9 +2,15 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use hogflare::pipeline::PipelineClient;
-use reqwest::Url;
+use reqwest::{Client, Url};
 use serde_json::Value;
-use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle, time::timeout};
+use tokio::{
+    net::TcpListener,
+    process::Command,
+    sync::mpsc,
+    task::JoinHandle,
+    time::{sleep, timeout},
+};
 
 pub async fn spawn_pipeline_stub(
 ) -> Result<(Url, mpsc::Receiver<Vec<Value>>, JoinHandle<()>), Box<dyn std::error::Error>> {
@@ -93,4 +99,71 @@ pub async fn cleanup(server_handle: JoinHandle<()>, pipeline_handle: JoinHandle<
     let _ = server_handle.await;
     pipeline_handle.abort();
     let _ = pipeline_handle.await;
+}
+
+#[allow(dead_code)]
+pub async fn wait_for_pipeline_events(
+    client: &Client,
+    url: &Url,
+) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+    for _ in 0..100 {
+        if let Ok(response) = client.get(url.clone()).send().await {
+            if response.status().is_success() {
+                let events: Vec<Value> = response.json().await?;
+                if !events.is_empty() {
+                    return Ok(events);
+                }
+            }
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    Err("timed out waiting for pipeline events".into())
+}
+
+#[allow(dead_code)]
+pub async fn start_docker_pipeline() -> Result<Url, Box<dyn std::error::Error>> {
+    let status = Command::new("docker")
+        .arg("compose")
+        .arg("up")
+        .arg("--build")
+        .arg("-d")
+        .arg("fake-pipeline")
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err("failed to start docker compose pipeline".into());
+    }
+
+    let client = Client::builder().timeout(Duration::from_secs(2)).build()?;
+    let base_url = Url::parse("http://127.0.0.1:8088/")?;
+    let health_url = base_url.join("health")?;
+
+    for _ in 0..100 {
+        if let Ok(response) = client.get(health_url.clone()).send().await {
+            if response.status().is_success() {
+                return Ok(base_url);
+            }
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+
+    Err("docker pipeline failed to report healthy state".into())
+}
+
+#[allow(dead_code)]
+pub async fn stop_docker_pipeline() -> Result<(), Box<dyn std::error::Error>> {
+    let status = Command::new("docker")
+        .arg("compose")
+        .arg("down")
+        .arg("--remove-orphans")
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err("failed to stop docker compose pipeline".into());
+    }
+
+    Ok(())
 }

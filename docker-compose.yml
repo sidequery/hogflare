@@ -1,0 +1,9 @@
+services:
+  fake-pipeline:
+    build:
+      context: .
+      dockerfile: scripts/fake_pipeline.Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8088:8080"

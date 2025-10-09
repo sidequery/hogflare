@@ -38,6 +38,20 @@ Load the environment and start the server:
 cargo run
 ```
 
+### Local pipeline emulator
+
+For end-to-end testing without Cloudflare you can launch the included FastAPI + DuckDB pipeline stub:
+
+```bash
+docker compose up -d fake-pipeline
+```
+
+The emulator listens on `http://127.0.0.1:8088/`. Hogflare tests use this service to verify that PostHog JS events persist into DuckDB; stop it when you are done:
+
+```bash
+docker compose down --remove-orphans
+```
+
 ### Supported endpoints
 
 * `POST /capture` – accepts capture payloads; honors `X-POSTHOG-API-KEY` and `X-POSTHOG-SENT-AT` headers.
