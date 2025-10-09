@@ -74,8 +74,6 @@ docker compose down --remove-orphans
 - [ ] Management endpoints (users, organizations, projects)
 - [ ] PostHog Cloud billing and license APIs
 
-Open a ticket if you need any of these proxied.
-
 All handlers return PostHog-compatible responses (`{"status": 1}` success, `{"status": 0}` failure).
 
 ### Wiring Cloudflare Pipelines
