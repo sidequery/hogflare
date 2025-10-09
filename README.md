@@ -20,6 +20,8 @@ The server is configured through environment variables:
 | `CLOUDFLARE_PIPELINE_ENDPOINT` | _required_ | The HTTPS ingestion endpoint created by `wrangler pipelines setup`. |
 | `CLOUDFLARE_PIPELINE_AUTH_TOKEN` | _optional_ | Bearer token to attach to pipeline requests when authentication is enabled. |
 | `CLOUDFLARE_PIPELINE_TIMEOUT_SECS` | `10` | Timeout (in seconds) applied to the pipeline HTTP client. |
+| `POSTHOG_API_KEY` | _optional_ | Default project API key returned from `/decide` when the client does not supply one. |
+| `POSTHOG_SESSION_RECORDING_ENDPOINT` | _optional_ | Session recording proxy target surfaced in `/decide` responses and used by the `/s` ingestion stub. |
 
 Create a `.env` file with the required values:
 
@@ -37,9 +39,15 @@ cargo run
 
 ### Supported endpoints
 
-* `POST /capture` – accepts standard PostHog capture payloads and forwards them to the configured Cloudflare pipeline.
-* `POST /identify` – accepts PostHog identify payloads and forwards them as `$identify` events.
-* `GET /healthz` – returns a simple JSON payload for liveness checks.
+* `POST /capture` – accepts capture payloads; honors `X-POSTHOG-API-KEY` and `X-POSTHOG-SENT-AT` headers.
+* `POST /identify` – accepts identify payloads and forwards them as `$identify` events.
+* `POST /groups` – handles PostHog group identify payloads and forwards them as `$groupidentify`.
+* `POST /batch` – accepts mixed capture/identify/group/alias/engage entries, applying shared API tokens when provided.
+* `POST /alias` – forwards `$create_alias` events.
+* `POST /engage` – ingests legacy `/engage` people updates (`$set`, `$set_once`, `$unset`, `$group_set`).
+* `POST /decide` – returns a PostHog-compatible feature flag shell including configured API token and session recording proxy.
+* `POST /s` and `POST /s/` – session recording ingestion stubs that always acknowledge uploads (useful for SDK compatibility).
+* `GET /healthz` – liveness probe.
 
 Responses mirror the PostHog ingestion API (`{"status": 1}` on success, `{"status": 0}` on error).
 
@@ -104,3 +112,15 @@ LIMIT 10
 ```
 
 Refer to the [Cloudflare Pipelines documentation](https://developers.cloudflare.com/pipelines/) for more advanced configurations, retention policies, and integrating additional sinks.
+
+## Compatibility notes
+
+Hogflare aims to be drop-in compatible with common PostHog SDK calls, but a few behaviours are still pending:
+
+* **Signed payload validation** – `X-POSTHOG-SIGNATURE` and `X-Hub-Signature` headers are currently ignored.
+* **Session recording storage** – `/s` acknowledges uploads but does not persist chunks anywhere; wire a downstream sink to enable replay.
+* **Feature flag resolution** – `/decide` returns static placeholders rather than running flag evaluation.
+* **Plugin / ingestion pipeline hooks** – PostHog plugins and data transformation hooks are not executed.
+* **Legacy endpoints** – older `/api/event/` and SDK-specific routes still proxy through `/capture`; add dedicated handlers if you rely on them.
+
+Pull requests covering these gaps are welcome.
