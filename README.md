@@ -52,19 +52,29 @@ The emulator listens on `http://127.0.0.1:8088/`. Hogflare tests use this servic
 docker compose down --remove-orphans
 ```
 
-### Supported endpoints
+### Endpoint coverage checklist
 
-* `POST /capture` – accepts capture payloads; honors `X-POSTHOG-API-KEY` and `X-POSTHOG-SENT-AT` headers.
-* `POST /identify` – accepts identify payloads and forwards them as `$identify` events.
-* `POST /groups` – handles PostHog group identify payloads and forwards them as `$groupidentify`.
-* `POST /batch` – accepts mixed capture/identify/group/alias/engage entries, applying shared API tokens when provided.
-* `POST /alias` – forwards `$create_alias` events.
-* `POST /engage` – ingests legacy `/engage` people updates (`$set`, `$set_once`, `$unset`, `$group_set`).
-* `POST /decide` – returns a PostHog-compatible feature flag shell including configured API token and session recording proxy.
-* `POST /s` and `POST /s/` – session recording ingestion stubs that always acknowledge uploads (useful for SDK compatibility).
-* `GET /healthz` – liveness probe.
+- [x] Event capture `/capture` (JSON or form payloads, header/body API keys, gzip/deflate/gzip-js compression)
+- [x] Identify `/identify` (forwards `$identify`, applies shared API keys)
+- [x] Group updates `/groups` (handles `$groupidentify` with type and key metadata)
+- [x] Batch ingest `/batch` (mixed capture/identify/group/alias/engage payloads with compression fallback)
+- [x] Alias merge `/alias` (forwards `$create_alias`, backfills alias metadata into `extra`)
+- [x] People updates `/engage` (supports `$set`, `$set_once`, `$unset`, `$group_set`)
+- [x] Decide `/decide` (returns placeholder flag payload, surfaces project API key and session recording endpoint)
+- [x] Session recording `/s` (validates HMAC when configured, forwards `$snapshot` chunks)
+- [x] Health probe `/healthz` (simple liveness response)
+- [ ] Feature flag evaluation `/api/feature_flag/` (only placeholder `/decide`)
+- [ ] Cohorts, experiments, insights, funnels, trends, retention, breakdown, stickiness (`/api/cohort/`, `/api/insight/`, etc.)
+- [ ] Query endpoints (`/api/query/`, `/api/projects/:id/query/`) and HogQL
+- [ ] Plugin ingestion `/api/plugin/` (lifecycle events, scheduled tasks)
+- [ ] Background export jobs `/api/exports/` (CSV/Parquet exports)
+- [ ] Session replay file storage (snapshots proxied, no persistence)
+- [ ] Dashboard analytics (dashboards, annotations, alerts)
+- [ ] Webhooks and action-based notifications
+- [ ] Management endpoints (users, organizations, projects)
+- [ ] PostHog Cloud billing and license APIs
 
-Responses mirror the PostHog ingestion API (`{"status": 1}` on success, `{"status": 0}` on error).
+All handlers return PostHog-compatible responses (`{"status": 1}` success, `{"status": 0}` failure).
 
 ### Wiring Cloudflare Pipelines
 
