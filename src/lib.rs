@@ -6,6 +6,7 @@ pub mod pipeline;
 use std::sync::Arc;
 
 use axum::{
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -13,7 +14,9 @@ use axum::{
     Json, Router,
 };
 use config::{Config, ConfigError};
-use extractors::{PostHogBatchPayload, PostHogPayload};
+use extractors::{
+    header_api_key, header_sent_at, verify_signature, PostHogBatchPayload, PostHogPayload,
+};
 use models::{
     AliasRequest, BatchRequest, CaptureRequest, DecideResponse, EngageRequest, ErrorResponse,
     GroupIdentifyRequest, IdentifyRequest, PostHogResponse,
@@ -26,10 +29,11 @@ use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
 #[derive(Clone)]
-struct AppState {
-    pipeline: Arc<PipelineClient>,
-    decide_api_token: Option<String>,
-    session_recording_endpoint: Option<String>,
+pub(crate) struct AppState {
+    pub(crate) pipeline: Arc<PipelineClient>,
+    pub(crate) decide_api_token: Option<String>,
+    pub(crate) session_recording_endpoint: Option<String>,
+    pub(crate) signing_secret: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -38,6 +42,8 @@ enum AppError {
     Pipeline(#[from] PipelineError),
     #[error("invalid payload: {0}")]
     InvalidPayload(String),
+    #[error("unauthorized: {0}")]
+    Unauthorized(String),
 }
 
 impl IntoResponse for AppError {
@@ -54,6 +60,10 @@ impl IntoResponse for AppError {
                 warn!(error = %err, "invalid request payload");
                 (StatusCode::BAD_REQUEST, err.clone())
             }
+            AppError::Unauthorized(err) => {
+                warn!(error = %err, "unauthorized request");
+                (StatusCode::UNAUTHORIZED, err.clone())
+            }
         };
 
         let body = Json(ErrorResponse {
@@ -62,6 +72,18 @@ impl IntoResponse for AppError {
         });
 
         (status, body).into_response()
+    }
+}
+
+impl From<extractors::PayloadExtractorError> for AppError {
+    fn from(error: extractors::PayloadExtractorError) -> Self {
+        match error {
+            extractors::PayloadExtractorError::MissingSignature
+            | extractors::PayloadExtractorError::InvalidSignature => {
+                AppError::Unauthorized(error.to_string())
+            }
+            _ => AppError::InvalidPayload(error.to_string()),
+        }
     }
 }
 
@@ -83,33 +105,36 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
     let listener = TcpListener::bind(config.address).await?;
     info!(address = %config.address, "listening for requests");
 
-    let state = build_state(
+    serve_with_options(
+        listener,
         Arc::new(pipeline),
         config.posthog_project_api_key.clone(),
         config.session_recording_endpoint.clone(),
-    );
-
-    serve_with_state(listener, state).await
+        config.posthog_signing_secret.clone(),
+    )
+    .await
 }
 
 pub fn build_router(pipeline: Arc<PipelineClient>) -> Router {
-    build_router_with_options(pipeline, None, None)
+    build_router_with_options(pipeline, None, None, None)
 }
 
 pub fn build_router_with_options(
     pipeline: Arc<PipelineClient>,
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
 ) -> Router {
     router(build_state(
         pipeline,
         decide_api_token,
         session_recording_endpoint,
+        signing_secret,
     ))
 }
 
 pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Result<(), RunError> {
-    serve_with_state(listener, build_state(pipeline, None, None)).await
+    serve_with_state(listener, build_state(pipeline, None, None, None)).await
 }
 
 pub async fn serve_with_options(
@@ -117,8 +142,14 @@ pub async fn serve_with_options(
     pipeline: Arc<PipelineClient>,
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
 ) -> Result<(), RunError> {
-    let state = build_state(pipeline, decide_api_token, session_recording_endpoint);
+    let state = build_state(
+        pipeline,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+    );
     serve_with_state(listener, state).await
 }
 
@@ -141,11 +172,13 @@ fn build_state(
     pipeline: Arc<PipelineClient>,
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
 ) -> AppState {
     AppState {
         pipeline,
         decide_api_token,
         session_recording_endpoint,
+        signing_secret,
     }
 }
 
@@ -284,8 +317,37 @@ async fn decide(
     Json(response)
 }
 
-async fn session_recording() -> impl IntoResponse {
-    Json(PostHogResponse::success())
+async fn session_recording(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<PostHogResponse>, AppError> {
+    let raw = body.to_vec();
+    verify_signature(&headers, &raw, state.signing_secret.as_deref()).map_err(AppError::from)?;
+
+    let sent_at = header_sent_at(&headers);
+    let payload: Value =
+        serde_json::from_slice(&raw).map_err(|err| AppError::InvalidPayload(err.to_string()))?;
+
+    let api_key = header_api_key(&headers).or_else(|| {
+        payload
+            .get("token")
+            .and_then(Value::as_str)
+            .map(|s| s.to_string())
+    });
+
+    let distinct_id = payload
+        .pointer("/data/metadata/distinct_id")
+        .or_else(|| payload.get("distinct_id"))
+        .and_then(Value::as_str)
+        .unwrap_or("session-recording")
+        .to_string();
+
+    let event =
+        PipelineEvent::from_session_recording(distinct_id, payload, api_key).with_sent_at(sent_at);
+
+    state.pipeline.send(vec![event]).await?;
+    Ok(Json(PostHogResponse::success()))
 }
 
 async fn health() -> impl IntoResponse {

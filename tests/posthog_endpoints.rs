@@ -3,9 +3,63 @@ mod helpers;
 
 use chrono::Utc;
 use helpers::{cleanup, spawn_app_with_options, spawn_pipeline_stub, wait_for_events};
-use reqwest::Client;
+use hmac::{Hmac, Mac};
+use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
+use sha2::Sha256;
 use std::time::Duration;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capture_requires_signature_when_secret_configured(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let signing_secret = "test-signing-secret";
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app_with_options(
+        pipeline_endpoint,
+        None,
+        None,
+        Some(signing_secret.to_string()),
+    )
+    .await?;
+
+    let base_url = format!("http://{}", address);
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+    let payload = json!({
+        "event": "signed-event",
+        "distinct_id": "signed-user"
+    });
+    let body = payload.to_string();
+
+    let unsigned = client
+        .post(format!("{}/capture", base_url))
+        .header("Content-Type", "application/json")
+        .body(body.clone())
+        .send()
+        .await?;
+    assert_eq!(unsigned.status(), StatusCode::UNAUTHORIZED);
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(signing_secret.as_bytes()).unwrap();
+    mac.update(body.as_bytes());
+    let signature = hex::encode(mac.finalize().into_bytes());
+
+    let signed = client
+        .post(format!("{}/capture", base_url))
+        .header("Content-Type", "application/json")
+        .header("X-POSTHOG-API-KEY", "phc_signature")
+        .header("X-POSTHOG-SIGNATURE", format!("sha256={}", signature))
+        .body(body)
+        .send()
+        .await?;
+    assert!(signed.status().is_success());
+
+    let events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["event_type"], "signed-event");
+    assert_eq!(events[0]["api_key"], "phc_signature");
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn std::error::Error>>
@@ -15,6 +69,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
         pipeline_endpoint,
         Some("phc_project_default".to_string()),
         Some("https://session.example.com".to_string()),
+        None,
     )
     .await?;
     let base_url = format!("http://{}", address);
@@ -196,14 +251,32 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
     );
 
     // session recording ingestion stubs
+    let session_payload = json!({
+        "data": {
+            "chunk": "base64-chunk",
+            "metadata": {"distinct_id": "session-user"}
+        },
+        "token": "phc_session_chunk"
+    });
+
     let session_response = client
         .post(format!("{}/s", base_url))
-        .body("chunk")
+        .header("Content-Type", "application/json")
+        .json(&session_payload)
         .send()
         .await?;
     assert!(session_response.status().is_success());
     let session_body: Value = session_response.json().await?;
     assert_eq!(session_body["status"], 1);
+
+    let session_events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(session_events.len(), 1);
+    assert_eq!(session_events[0]["event_type"], "$snapshot");
+    assert_eq!(
+        session_events[0]["properties"]["data"]["metadata"]["distinct_id"],
+        "session-user"
+    );
+    assert_eq!(session_events[0]["api_key"], "phc_session_chunk");
 
     // health
     let health_response = client.get(format!("{}/healthz", base_url)).send().await?;

@@ -10,9 +10,14 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use flate2::read::{GzDecoder, ZlibDecoder};
+use hex::encode as hex_encode;
+use hmac::{Hmac, Mac};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
 use serde_urlencoded;
+use sha1::Sha1;
+use sha2::Sha256;
+use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tracing::warn;
 
@@ -20,6 +25,7 @@ use crate::models::{
     AliasRequest, BatchRequest, CaptureRequest, EngageRequest, ErrorResponse, GroupIdentifyRequest,
     IdentifyRequest,
 };
+use crate::AppState;
 
 pub struct PostHogPayload<T> {
     pub items: Vec<T>,
@@ -62,34 +68,52 @@ pub enum PayloadExtractorError {
     Structure(&'static str),
     #[error("unsupported compression algorithm: {0}")]
     UnsupportedCompression(String),
+    #[error("missing signature header")]
+    MissingSignature,
+    #[error("signature verification failed")]
+    InvalidSignature,
 }
 
 impl IntoResponse for PayloadExtractorError {
     fn into_response(self) -> axum::response::Response {
         warn!(error = %self, "failed to parse PostHog payload");
-        let body = Json(ErrorResponse {
-            status: 0,
-            error: format!("invalid payload: {self}"),
-        });
-        (StatusCode::BAD_REQUEST, body).into_response()
+        match self {
+            PayloadExtractorError::MissingSignature | PayloadExtractorError::InvalidSignature => {
+                let body = Json(ErrorResponse {
+                    status: 0,
+                    error: self.to_string(),
+                });
+                (StatusCode::UNAUTHORIZED, body).into_response()
+            }
+            _ => {
+                let body = Json(ErrorResponse {
+                    status: 0,
+                    error: format!("invalid payload: {self}"),
+                });
+                (StatusCode::BAD_REQUEST, body).into_response()
+            }
+        }
     }
 }
 
 #[async_trait]
-impl<S, T> FromRequest<S, Body> for PostHogPayload<T>
+impl<T> FromRequest<AppState, Body> for PostHogPayload<T>
 where
-    S: Send + Sync,
     T: DeserializeOwned + ApplyApiKey,
 {
     type Rejection = PayloadExtractorError;
 
-    async fn from_request(request: Request<Body>, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request(
+        request: Request<Body>,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let (parts, body) = request.into_parts();
         let headers = parts.headers;
         let bytes = to_bytes(body, usize::MAX)
             .await
             .map_err(PayloadExtractorError::BodyRead)?;
 
+        verify_signature(&headers, &bytes, state.signing_secret.as_deref())?;
         let decoded = decode_content_encoding(&headers, &bytes)?;
         let mut payloads = parse_posthog_body::<T>(&headers, &decoded)?;
         let header_api_key = header_api_key(&headers);
@@ -104,19 +128,20 @@ where
 }
 
 #[async_trait]
-impl<S> FromRequest<S, Body> for PostHogBatchPayload
-where
-    S: Send + Sync,
-{
+impl FromRequest<AppState, Body> for PostHogBatchPayload {
     type Rejection = PayloadExtractorError;
 
-    async fn from_request(request: Request<Body>, _state: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request(
+        request: Request<Body>,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let (parts, body) = request.into_parts();
         let headers = parts.headers;
         let bytes = to_bytes(body, usize::MAX)
             .await
             .map_err(PayloadExtractorError::BodyRead)?;
 
+        verify_signature(&headers, &bytes, state.signing_secret.as_deref())?;
         let decoded = decode_content_encoding(&headers, &bytes)?;
         let mut payload = parse_posthog_batch_body(&headers, &decoded)?;
         let header_api_key = header_api_key(&headers);
@@ -148,19 +173,100 @@ fn decode_content_encoding(
     }
 }
 
-fn header_api_key(headers: &HeaderMap) -> Option<String> {
+pub(crate) fn header_api_key(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-posthog-api-key")
         .and_then(|value| value.to_str().ok())
         .map(|value| value.to_string())
 }
 
-fn header_sent_at(headers: &HeaderMap) -> Option<DateTime<Utc>> {
+pub(crate) fn header_sent_at(headers: &HeaderMap) -> Option<DateTime<Utc>> {
     headers
         .get("x-posthog-sent-at")
         .and_then(|value| value.to_str().ok())
         .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
         .map(|dt| dt.with_timezone(&Utc))
+}
+
+pub(crate) fn verify_signature(
+    headers: &HeaderMap,
+    body: &[u8],
+    signing_secret: Option<&str>,
+) -> Result<(), PayloadExtractorError> {
+    let Some(secret) = signing_secret else {
+        return Ok(());
+    };
+
+    let mut provided = Vec::new();
+
+    if let Some(header) = headers.get("x-posthog-signature") {
+        let raw = header
+            .to_str()
+            .map_err(|_| PayloadExtractorError::InvalidSignature)?
+            .trim();
+        let (algo, signature) = parse_signature(raw, "sha256");
+        provided.push((algo.to_string(), signature.to_string()));
+    }
+
+    if let Some(header) = headers.get("x-hub-signature") {
+        let raw = header
+            .to_str()
+            .map_err(|_| PayloadExtractorError::InvalidSignature)?
+            .trim();
+        let (algo, signature) = parse_signature(raw, "sha1");
+        provided.push((algo.to_string(), signature.to_string()));
+    }
+
+    if provided.is_empty() {
+        return Err(PayloadExtractorError::MissingSignature);
+    }
+
+    for (algo, signature) in provided {
+        if verify_hmac(body, secret, &algo, &signature) {
+            return Ok(());
+        }
+    }
+
+    Err(PayloadExtractorError::InvalidSignature)
+}
+
+fn parse_signature<'a>(value: &'a str, default_algo: &'a str) -> (&'a str, &'a str) {
+    if let Some((algo, signature)) = value.split_once('=') {
+        (algo.trim(), signature.trim())
+    } else {
+        (default_algo, value.trim())
+    }
+}
+
+fn verify_hmac(body: &[u8], secret: &str, algo: &str, provided: &str) -> bool {
+    match algo {
+        "sha256" => {
+            let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+                return false;
+            };
+            mac.update(body);
+            let expected = mac.finalize().into_bytes();
+            constant_time_eq_hex(&expected, provided)
+        }
+        "sha1" => {
+            let Ok(mut mac) = Hmac::<Sha1>::new_from_slice(secret.as_bytes()) else {
+                return false;
+            };
+            mac.update(body);
+            let expected = mac.finalize().into_bytes();
+            constant_time_eq_hex(&expected, provided)
+        }
+        _ => false,
+    }
+}
+
+fn constant_time_eq_hex(expected: &[u8], provided: &str) -> bool {
+    let expected_hex = hex_encode(expected);
+    let cleaned = provided
+        .trim()
+        .trim_start_matches("sha256=")
+        .trim_start_matches("sha1=");
+    expected_hex.as_bytes().ct_eq(cleaned.as_bytes()).into()
 }
 
 fn parse_posthog_body<T>(headers: &HeaderMap, body: &[u8]) -> Result<Vec<T>, PayloadExtractorError>
@@ -535,9 +641,26 @@ mod tests {
     use flate2::write::{GzEncoder, ZlibEncoder};
     use flate2::Compression;
     use serde_json::json;
-    use std::io::Write;
+    use std::{io::Write, sync::Arc, time::Duration};
 
-    use crate::models::CaptureRequest;
+    use crate::{models::CaptureRequest, pipeline::PipelineClient, AppState};
+    use reqwest::Url;
+
+    fn test_state() -> AppState {
+        let pipeline = PipelineClient::new(
+            Url::parse("http://localhost:0").unwrap(),
+            None,
+            Duration::from_secs(1),
+        )
+        .unwrap();
+
+        AppState {
+            pipeline: Arc::new(pipeline),
+            decide_api_token: None,
+            session_recording_endpoint: None,
+            signing_secret: None,
+        }
+    }
 
     #[tokio::test]
     async fn parses_json_payload() {
@@ -554,8 +677,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
+        let state = test_state();
         let payload: PostHogPayload<CaptureRequest> =
-            PostHogPayload::from_request(request, &()).await.unwrap();
+            PostHogPayload::from_request(request, &state).await.unwrap();
 
         assert_eq!(payload.items.len(), 1);
         assert_eq!(payload.items[0].event, "test");
@@ -579,8 +703,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
+        let state = test_state();
         let payload: PostHogPayload<CaptureRequest> =
-            PostHogPayload::from_request(request, &()).await.unwrap();
+            PostHogPayload::from_request(request, &state).await.unwrap();
 
         assert_eq!(payload.items.len(), 1);
         assert_eq!(payload.items[0].event, "form-test");
@@ -605,8 +730,9 @@ mod tests {
             .body(Body::from(compressed))
             .unwrap();
 
+        let state = test_state();
         let payload: PostHogPayload<CaptureRequest> =
-            PostHogPayload::from_request(request, &()).await.unwrap();
+            PostHogPayload::from_request(request, &state).await.unwrap();
 
         assert_eq!(payload.items.len(), 1);
         assert_eq!(payload.items[0].event, "gzip-test");
@@ -630,8 +756,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
+        let state = test_state();
         let payload: PostHogPayload<CaptureRequest> =
-            PostHogPayload::from_request(request, &()).await.unwrap();
+            PostHogPayload::from_request(request, &state).await.unwrap();
 
         assert_eq!(payload.items.len(), 1);
         assert_eq!(payload.items[0].event, "wrapped");
@@ -661,8 +788,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
+        let state = test_state();
         let payload: PostHogPayload<CaptureRequest> =
-            PostHogPayload::from_request(request, &()).await.unwrap();
+            PostHogPayload::from_request(request, &state).await.unwrap();
 
         assert_eq!(payload.items.len(), 1);
         assert_eq!(payload.items[0].event, "compressed-form");
@@ -695,8 +823,9 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
+        let state = test_state();
         let payload: PostHogPayload<CaptureRequest> =
-            PostHogPayload::from_request(request, &()).await.unwrap();
+            PostHogPayload::from_request(request, &state).await.unwrap();
 
         assert_eq!(payload.items.len(), 1);
         assert_eq!(payload.items[0].event, "implicit-compression");
@@ -727,7 +856,8 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let payload: PostHogBatchPayload = PostHogBatchPayload::from_request(request, &())
+        let state = test_state();
+        let payload: PostHogBatchPayload = PostHogBatchPayload::from_request(request, &state)
             .await
             .unwrap();
 
@@ -768,7 +898,8 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let payload: PostHogBatchPayload = PostHogBatchPayload::from_request(request, &())
+        let state = test_state();
+        let payload: PostHogBatchPayload = PostHogBatchPayload::from_request(request, &state)
             .await
             .unwrap();
 

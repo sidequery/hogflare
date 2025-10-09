@@ -174,6 +174,24 @@ impl PipelineEvent {
         }
     }
 
+    pub fn from_session_recording(
+        distinct_id: String,
+        payload: Value,
+        api_key: Option<String>,
+    ) -> Self {
+        Self {
+            source: "posthog",
+            event_type: "$snapshot".to_string(),
+            distinct_id,
+            timestamp: None,
+            properties: Some(payload),
+            context: None,
+            person_properties: None,
+            api_key,
+            extra: std::collections::HashMap::new(),
+        }
+    }
+
     pub fn with_sent_at(mut self, sent_at: Option<DateTime<Utc>>) -> Self {
         if let Some(sent_at) = sent_at {
             self.extra
@@ -269,5 +287,29 @@ mod tests {
         let event = PipelineEvent::from_engage(payload);
         assert_eq!(event.event_type, "$engage");
         assert_eq!(event.extra.get("$set").unwrap(), &json!({ "name": "Alex" }));
+    }
+
+    #[test]
+    fn converts_session_recording_payload() {
+        let payload = json!({
+            "data": {
+                "chunk_id": 0,
+                "chunk": "base64",
+                "metadata": {
+                    "distinct_id": "recording-user"
+                }
+            }
+        });
+
+        let event = PipelineEvent::from_session_recording(
+            "recording-user".to_string(),
+            payload.clone(),
+            Some("phc_session".to_string()),
+        );
+
+        assert_eq!(event.event_type, "$snapshot");
+        assert_eq!(event.distinct_id, "recording-user");
+        assert_eq!(event.api_key.as_deref(), Some("phc_session"));
+        assert_eq!(event.properties, Some(payload));
     }
 }
