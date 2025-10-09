@@ -48,6 +48,98 @@ impl PostHogResponse {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct BatchRequest {
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub batch: Vec<CaptureRequest>,
+    #[serde(default)]
+    pub sent_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+impl BatchRequest {
+    pub fn into_captures(self) -> Vec<CaptureRequest> {
+        let BatchRequest { api_key, batch, .. } = self;
+        batch
+            .into_iter()
+            .map(|mut item| {
+                if item.api_key.is_none() {
+                    item.api_key = api_key.clone();
+                }
+                item
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct GroupIdentifyRequest {
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub group_type: String,
+    pub group_key: String,
+    #[serde(default)]
+    pub properties: Option<Value>,
+    #[serde(default)]
+    pub timestamp: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DecideResponse {
+    pub status: u16,
+    #[serde(rename = "featureFlags")]
+    pub feature_flags: HashMap<String, Value>,
+    #[serde(rename = "featureFlagPayloads")]
+    pub feature_flag_payloads: HashMap<String, Value>,
+    pub config: DecideConfig,
+    #[serde(rename = "errorsWhileComputingFlags")]
+    pub errors_while_computing_flags: Vec<Value>,
+    #[serde(rename = "sessionRecording")]
+    pub session_recording: DecideSessionRecording,
+    #[serde(rename = "supportedCompression")]
+    pub supported_compression: Vec<String>,
+}
+
+impl Default for DecideResponse {
+    fn default() -> Self {
+        Self {
+            status: 200,
+            feature_flags: HashMap::new(),
+            feature_flag_payloads: HashMap::new(),
+            config: DecideConfig::default(),
+            errors_while_computing_flags: Vec::new(),
+            session_recording: DecideSessionRecording::default(),
+            supported_compression: vec!["gzip".to_string(), "gzip-js".to_string()],
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct DecideConfig {
+    #[serde(rename = "enableCollectEverything")]
+    pub enable_collect_everything: bool,
+    #[serde(rename = "autocapture")]
+    pub autocapture: bool,
+    #[serde(rename = "apiToken")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_token: Option<String>,
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct DecideSessionRecording {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(rename = "consoleLogRecordingEnabled")]
+    pub console_log_recording_enabled: bool,
+    pub proxy: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ErrorResponse {
     pub status: u8,
@@ -132,5 +224,27 @@ mod tests {
                 extra,
             }
         );
+    }
+
+    #[test]
+    fn batch_request_applies_shared_api_key() {
+        let payload = BatchRequest {
+            api_key: Some("phc_batch".to_string()),
+            batch: vec![CaptureRequest {
+                api_key: None,
+                event: "batched".to_string(),
+                distinct_id: "xyz".to_string(),
+                properties: None,
+                timestamp: None,
+                context: None,
+                extra: HashMap::new(),
+            }],
+            sent_at: None,
+            extra: HashMap::new(),
+        };
+
+        let captures = payload.into_captures();
+        assert_eq!(captures.len(), 1);
+        assert_eq!(captures[0].api_key.as_deref(), Some("phc_batch"));
     }
 }
