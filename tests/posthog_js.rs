@@ -62,7 +62,7 @@ async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std
 async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error::Error>> {
     ensure_js_dependencies_installed().await?;
 
-    let pipeline_base = start_docker_pipeline().await?;
+    let (pipeline_base, _pipeline_guard) = start_docker_pipeline().await?;
 
     let test_result = async {
         let (address, server_handle) =
@@ -85,7 +85,7 @@ async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error:
 
             let client = Client::builder().timeout(Duration::from_secs(2)).build()?;
             let events_url = pipeline_base.join("events")?;
-            let events = wait_for_pipeline_events(&client, &events_url).await?;
+            let events = wait_for_pipeline_events(&client, &events_url, 1).await?;
 
             let event = events
                 .iter()
