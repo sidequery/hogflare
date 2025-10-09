@@ -1,4 +1,5 @@
 pub mod config;
+pub mod extractors;
 pub mod models;
 pub mod pipeline;
 
@@ -12,7 +13,11 @@ use axum::{
     Json, Router,
 };
 use config::{Config, ConfigError};
-use models::{CaptureRequest, ErrorResponse, IdentifyRequest, PostHogResponse};
+use extractors::{PostHogBatchPayload, PostHogPayload};
+use models::{
+    CaptureRequest, DecideResponse, ErrorResponse, GroupIdentifyRequest, IdentifyRequest,
+    PostHogResponse,
+};
 use pipeline::{PipelineClient, PipelineError, PipelineEvent};
 use serde_json::json;
 use thiserror::Error;
@@ -32,7 +37,7 @@ enum AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
-        error!(%self, "request failed");
+        error!(error = %self, "request failed");
         let body = Json(ErrorResponse {
             status: 0,
             error: "internal server error".to_string(),
@@ -58,22 +63,28 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
 
     let listener = TcpListener::bind(config.address).await?;
     info!(address = %config.address, "listening for requests");
-
     serve(listener, Arc::new(pipeline)).await
 }
 
 pub fn build_router(pipeline: Arc<PipelineClient>) -> Router {
-    Router::new()
-        .route("/capture", post(capture))
-        .route("/identify", post(identify))
-        .route("/healthz", get(health))
-        .with_state(AppState { pipeline })
+    router(AppState { pipeline })
 }
 
 pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Result<(), RunError> {
     axum::serve(listener, build_router(pipeline).into_make_service())
         .await
         .map_err(|err| RunError::Serve(err.to_string()))
+}
+
+fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/capture", post(capture))
+        .route("/identify", post(identify))
+        .route("/batch", post(batch))
+        .route("/groups", post(groups))
+        .route("/decide", post(decide))
+        .route("/healthz", get(health))
+        .with_state(state)
 }
 
 fn init_tracing() {
@@ -87,20 +98,55 @@ fn init_tracing() {
 
 async fn capture(
     State(state): State<AppState>,
-    Json(payload): Json<CaptureRequest>,
+    PostHogPayload(payloads): PostHogPayload<CaptureRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
-    let event = PipelineEvent::from_capture(payload);
-    state.pipeline.send(vec![event]).await?;
+    let events = payloads
+        .into_iter()
+        .map(PipelineEvent::from_capture)
+        .collect();
+    state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
 
 async fn identify(
     State(state): State<AppState>,
-    Json(payload): Json<IdentifyRequest>,
+    PostHogPayload(payloads): PostHogPayload<IdentifyRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
-    let event = PipelineEvent::from_identify(payload);
-    state.pipeline.send(vec![event]).await?;
+    let events = payloads
+        .into_iter()
+        .map(PipelineEvent::from_identify)
+        .collect();
+    state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
+}
+
+async fn batch(
+    State(state): State<AppState>,
+    PostHogBatchPayload(payload): PostHogBatchPayload,
+) -> Result<Json<PostHogResponse>, AppError> {
+    let events = payload
+        .into_captures()
+        .into_iter()
+        .map(PipelineEvent::from_capture)
+        .collect();
+    state.pipeline.send(events).await?;
+    Ok(Json(PostHogResponse::success()))
+}
+
+async fn groups(
+    State(state): State<AppState>,
+    PostHogPayload(payloads): PostHogPayload<GroupIdentifyRequest>,
+) -> Result<Json<PostHogResponse>, AppError> {
+    let events = payloads
+        .into_iter()
+        .map(PipelineEvent::from_group_identify)
+        .collect();
+    state.pipeline.send(events).await?;
+    Ok(Json(PostHogResponse::success()))
+}
+
+async fn decide() -> impl IntoResponse {
+    Json(DecideResponse::default())
 }
 
 async fn health() -> impl IntoResponse {

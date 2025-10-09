@@ -1,23 +1,16 @@
-use std::{path::Path, sync::Arc, time::Duration};
+#[path = "helpers/mod.rs"]
+mod helpers;
 
-use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
-use hogflare::pipeline::PipelineClient;
-use reqwest::Url;
+use std::path::Path;
+
+use helpers::{cleanup, spawn_app, spawn_pipeline_stub, wait_for_events};
 use serde_json::Value;
-use tokio::{net::TcpListener, process::Command, sync::mpsc, task::JoinHandle, time::timeout};
+use tokio::process::Command;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std::error::Error>> {
     let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
-
-    let pipeline_client = PipelineClient::new(pipeline_endpoint, None, Duration::from_secs(5))?;
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
-
-    let server_handle = tokio::spawn({
-        let pipeline = Arc::new(pipeline_client);
-        async move { hogflare::serve(listener, pipeline).await }
-    });
+    let (address, server_handle) = spawn_app(pipeline_endpoint).await?;
 
     ensure_js_dependencies_installed().await?;
 
@@ -36,11 +29,7 @@ async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std
         "posthog js script exited with status {status:?}"
     );
 
-    let events = timeout(Duration::from_secs(10), pipeline_rx.recv())
-        .await
-        .map_err(|_| "timed out waiting for pipeline payload")?
-        .ok_or("pipeline receiver closed unexpectedly")?;
-
+    let events = wait_for_events(&mut pipeline_rx).await?;
     let event = events
         .first()
         .expect("expected at least one event in pipeline payload");
@@ -51,23 +40,18 @@ async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std
 
     let properties = event
         .get("properties")
-        .and_then(|value| value.as_object())
+        .and_then(Value::as_object)
         .expect("event payload should include properties");
     assert_eq!(
         properties.get("framework").and_then(Value::as_str),
-        Some("integration"),
+        Some("integration")
     );
     assert_eq!(
         properties.get("client").and_then(Value::as_str),
-        Some("posthog-js"),
+        Some("posthog-js")
     );
 
-    // Shut down servers to avoid task leaks.
-    server_handle.abort();
-    let _ = server_handle.await;
-    pipeline_handle.abort();
-    let _ = pipeline_handle.await;
-
+    cleanup(server_handle, pipeline_handle).await;
     Ok(())
 }
 
@@ -88,38 +72,4 @@ async fn ensure_js_dependencies_installed() -> Result<(), Box<dyn std::error::Er
     }
 
     Ok(())
-}
-
-async fn spawn_pipeline_stub(
-) -> Result<(Url, mpsc::Receiver<Vec<Value>>, JoinHandle<()>), Box<dyn std::error::Error>> {
-    let (sender, receiver) = mpsc::channel(8);
-
-    #[derive(Clone)]
-    struct StubState {
-        sender: mpsc::Sender<Vec<Value>>,
-    }
-
-    async fn handle_events(
-        State(state): State<StubState>,
-        Json(payload): Json<Vec<Value>>,
-    ) -> StatusCode {
-        let _ = state.sender.send(payload).await;
-        StatusCode::OK
-    }
-
-    let app = Router::new()
-        .route("/", post(handle_events))
-        .with_state(StubState { sender });
-
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let address = listener.local_addr()?;
-    let endpoint = Url::parse(&format!("http://{}/", address))?;
-
-    let handle = tokio::spawn(async move {
-        if let Err(err) = axum::serve(listener, app.into_make_service()).await {
-            eprintln!("pipeline stub terminated: {err}");
-        }
-    });
-
-    Ok((endpoint, receiver, handle))
 }
