@@ -52,19 +52,42 @@ The emulator listens on `http://127.0.0.1:8088/`. Hogflare tests use this servic
 docker compose down --remove-orphans
 ```
 
-### Supported endpoints
+### Supported endpoints checklist
 
-* `POST /capture` – accepts capture payloads; honors `X-POSTHOG-API-KEY` and `X-POSTHOG-SENT-AT` headers.
-* `POST /identify` – accepts identify payloads and forwards them as `$identify` events.
-* `POST /groups` – handles PostHog group identify payloads and forwards them as `$groupidentify`.
-* `POST /batch` – accepts mixed capture/identify/group/alias/engage entries, applying shared API tokens when provided.
-* `POST /alias` – forwards `$create_alias` events.
-* `POST /engage` – ingests legacy `/engage` people updates (`$set`, `$set_once`, `$unset`, `$group_set`).
-* `POST /decide` – returns a PostHog-compatible feature flag shell including configured API token and session recording proxy.
-* `POST /s` and `POST /s/` – session recording ingestion stubs that always acknowledge uploads (useful for SDK compatibility).
-* `GET /healthz` – liveness probe.
+- [x] `POST /capture`
+  - [x] Accept JSON payloads
+  - [x] Accept form-encoded payloads (`data=...`)
+  - [x] Honor `X-POSTHOG-API-KEY`
+  - [x] Honor `X-POSTHOG-SENT-AT`
+  - [x] Support `gzip`, `deflate`, `gzip-js` compressed data
+- [x] `POST /identify`
+  - [x] Forward `$identify` events
+  - [x] Apply shared API keys from headers or body
+- [x] `POST /groups`
+  - [x] Forward `$groupidentify`
+  - [x] Preserve group type/key metadata
+- [x] `POST /batch`
+  - [x] Mixed capture, identify, group, alias, engage events
+  - [x] Shared API key propagation to child events
+  - [x] Implicit compression fallback (`data`, `compression`)
+- [x] `POST /alias`
+  - [x] Forward `$create_alias`
+  - [x] Backfill alias metadata into `extra`
+- [x] `POST /engage`
+  - [x] Handle `$set`
+  - [x] Handle `$set_once`
+  - [x] Handle `$unset`
+  - [x] Handle `$group_set`
+- [x] `POST /decide`
+  - [x] Return placeholder flag response (200)
+  - [x] Surface configured project API key
+  - [x] Surface session recording proxy endpoint (if configured)
+- [x] `POST /s` / `POST /s/`
+  - [x] Validate HMAC signature when `POSTHOG_SIGNING_SECRET` is set
+  - [x] Forward `$snapshot` events to pipeline with chunk metadata
+- [x] `GET /healthz` – liveness probe
 
-Responses mirror the PostHog ingestion API (`{"status": 1}` on success, `{"status": 0}` on error).
+All handlers return PostHog-compatible responses (`{"status": 1}` success, `{"status": 0}` failure).
 
 ### Wiring Cloudflare Pipelines
 
