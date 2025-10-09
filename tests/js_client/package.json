@@ -1,0 +1,11 @@
+{
+  "name": "hogflare-integration-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "PostHog JS client integration harness for Hogflare",
+  "license": "MIT",
+  "dependencies": {
+    "jsdom": "^24.0.0",
+    "posthog-js": "^1.200.0"
+  }
+}

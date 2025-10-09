@@ -1,2 +1,4 @@
 target/
 **/*.rs.bk
+node_modules/
+tests/js_client/node_modules/
