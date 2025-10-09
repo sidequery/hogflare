@@ -32,5 +32,11 @@ jobs:
         working-directory: tests/js_client
         run: bun install
 
+      - name: Verify Docker Compose
+        run: docker compose version
+
+      - name: Pre-build fake pipeline image
+        run: docker compose build fake-pipeline
+
       - name: Run tests
         run: cargo test --all --locked
