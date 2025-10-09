@@ -8,6 +8,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
+use chrono::{DateTime, Utc};
 use flate2::read::{GzDecoder, ZlibDecoder};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value};
@@ -15,11 +16,31 @@ use serde_urlencoded;
 use thiserror::Error;
 use tracing::warn;
 
-use crate::models::{BatchRequest, ErrorResponse};
+use crate::models::{
+    AliasRequest, BatchRequest, CaptureRequest, EngageRequest, ErrorResponse, GroupIdentifyRequest,
+    IdentifyRequest,
+};
 
-pub struct PostHogPayload<T>(pub Vec<T>);
+pub struct PostHogPayload<T> {
+    pub items: Vec<T>,
+    pub sent_at: Option<DateTime<Utc>>,
+}
 
-pub struct PostHogBatchPayload(pub BatchRequest);
+pub struct PostHogBatchPayload {
+    pub batch: BatchRequest,
+}
+
+trait ApplyApiKey {
+    fn ensure_api_key(&mut self, api_key: &str);
+}
+
+fn apply_api_key<T: ApplyApiKey>(items: &mut [T], api_key: Option<&str>) {
+    if let Some(api_key) = api_key {
+        for item in items {
+            item.ensure_api_key(api_key);
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum PayloadExtractorError {
@@ -58,7 +79,7 @@ impl IntoResponse for PayloadExtractorError {
 impl<S, T> FromRequest<S, Body> for PostHogPayload<T>
 where
     S: Send + Sync,
-    T: DeserializeOwned,
+    T: DeserializeOwned + ApplyApiKey,
 {
     type Rejection = PayloadExtractorError;
 
@@ -70,9 +91,15 @@ where
             .map_err(PayloadExtractorError::BodyRead)?;
 
         let decoded = decode_content_encoding(&headers, &bytes)?;
-        let payloads = parse_posthog_body::<T>(&headers, &decoded)?;
+        let mut payloads = parse_posthog_body::<T>(&headers, &decoded)?;
+        let header_api_key = header_api_key(&headers);
+        apply_api_key(&mut payloads, header_api_key.as_deref());
+        let sent_at = header_sent_at(&headers);
 
-        Ok(PostHogPayload(payloads))
+        Ok(PostHogPayload {
+            items: payloads,
+            sent_at,
+        })
     }
 }
 
@@ -91,9 +118,16 @@ where
             .map_err(PayloadExtractorError::BodyRead)?;
 
         let decoded = decode_content_encoding(&headers, &bytes)?;
-        let payload = parse_posthog_batch_body(&headers, &decoded)?;
+        let mut payload = parse_posthog_batch_body(&headers, &decoded)?;
+        let header_api_key = header_api_key(&headers);
+        if payload.api_key.is_none() {
+            payload.api_key = header_api_key;
+        }
+        if payload.sent_at.is_none() {
+            payload.sent_at = header_sent_at(&headers);
+        }
 
-        Ok(PostHogBatchPayload(payload))
+        Ok(PostHogBatchPayload { batch: payload })
     }
 }
 
@@ -112,6 +146,21 @@ fn decode_content_encoding(
         Some(encoding) => Err(PayloadExtractorError::UnsupportedEncoding(encoding)),
         None => Ok(body.to_vec()),
     }
+}
+
+fn header_api_key(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-posthog-api-key")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.to_string())
+}
+
+fn header_sent_at(headers: &HeaderMap) -> Option<DateTime<Utc>> {
+    headers
+        .get("x-posthog-sent-at")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|raw| DateTime::parse_from_rfc3339(raw).ok())
+        .map(|dt| dt.with_timezone(&Utc))
 }
 
 fn parse_posthog_body<T>(headers: &HeaderMap, body: &[u8]) -> Result<Vec<T>, PayloadExtractorError>
@@ -437,6 +486,46 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, PayloadExtractorError> {
     Ok(output)
 }
 
+impl ApplyApiKey for CaptureRequest {
+    fn ensure_api_key(&mut self, api_key: &str) {
+        if self.api_key.is_none() {
+            self.api_key = Some(api_key.to_string());
+        }
+    }
+}
+
+impl ApplyApiKey for IdentifyRequest {
+    fn ensure_api_key(&mut self, api_key: &str) {
+        if self.api_key.is_none() {
+            self.api_key = Some(api_key.to_string());
+        }
+    }
+}
+
+impl ApplyApiKey for GroupIdentifyRequest {
+    fn ensure_api_key(&mut self, api_key: &str) {
+        if self.api_key.is_none() {
+            self.api_key = Some(api_key.to_string());
+        }
+    }
+}
+
+impl ApplyApiKey for AliasRequest {
+    fn ensure_api_key(&mut self, api_key: &str) {
+        if self.api_key.is_none() {
+            self.api_key = Some(api_key.to_string());
+        }
+    }
+}
+
+impl ApplyApiKey for EngageRequest {
+    fn ensure_api_key(&mut self, api_key: &str) {
+        if self.api_key.is_none() {
+            self.api_key = Some(api_key.to_string());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -465,13 +554,13 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let PostHogPayload(payloads): PostHogPayload<CaptureRequest> =
+        let payload: PostHogPayload<CaptureRequest> =
             PostHogPayload::from_request(request, &()).await.unwrap();
 
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].event, "test");
-        assert_eq!(payloads[0].distinct_id, "abc");
-        assert_eq!(payloads[0].api_key.as_deref(), Some("phc_123"));
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "test");
+        assert_eq!(payload.items[0].distinct_id, "abc");
+        assert_eq!(payload.items[0].api_key.as_deref(), Some("phc_123"));
     }
 
     #[tokio::test]
@@ -490,12 +579,12 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let PostHogPayload(payloads): PostHogPayload<CaptureRequest> =
+        let payload: PostHogPayload<CaptureRequest> =
             PostHogPayload::from_request(request, &()).await.unwrap();
 
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].event, "form-test");
-        assert_eq!(payloads[0].api_key.as_deref(), Some("phc_form"));
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "form-test");
+        assert_eq!(payload.items[0].api_key.as_deref(), Some("phc_form"));
     }
 
     #[tokio::test]
@@ -516,12 +605,12 @@ mod tests {
             .body(Body::from(compressed))
             .unwrap();
 
-        let PostHogPayload(payloads): PostHogPayload<CaptureRequest> =
+        let payload: PostHogPayload<CaptureRequest> =
             PostHogPayload::from_request(request, &()).await.unwrap();
 
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].event, "gzip-test");
-        assert_eq!(payloads[0].distinct_id, "123");
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "gzip-test");
+        assert_eq!(payload.items[0].distinct_id, "123");
     }
 
     #[tokio::test]
@@ -541,12 +630,12 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let PostHogPayload(payloads): PostHogPayload<CaptureRequest> =
+        let payload: PostHogPayload<CaptureRequest> =
             PostHogPayload::from_request(request, &()).await.unwrap();
 
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].event, "wrapped");
-        assert_eq!(payloads[0].api_key.as_deref(), Some("phc_wrapped"));
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "wrapped");
+        assert_eq!(payload.items[0].api_key.as_deref(), Some("phc_wrapped"));
     }
 
     #[tokio::test]
@@ -572,13 +661,13 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let PostHogPayload(payloads): PostHogPayload<CaptureRequest> =
+        let payload: PostHogPayload<CaptureRequest> =
             PostHogPayload::from_request(request, &()).await.unwrap();
 
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].event, "compressed-form");
-        assert_eq!(payloads[0].distinct_id, "form-user");
-        assert_eq!(payloads[0].api_key.as_deref(), Some("phc_compressed"));
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "compressed-form");
+        assert_eq!(payload.items[0].distinct_id, "form-user");
+        assert_eq!(payload.items[0].api_key.as_deref(), Some("phc_compressed"));
     }
 
     #[tokio::test]
@@ -606,13 +695,16 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let PostHogPayload(payloads): PostHogPayload<CaptureRequest> =
+        let payload: PostHogPayload<CaptureRequest> =
             PostHogPayload::from_request(request, &()).await.unwrap();
 
-        assert_eq!(payloads.len(), 1);
-        assert_eq!(payloads[0].event, "implicit-compression");
-        assert_eq!(payloads[0].distinct_id, "json-user");
-        assert_eq!(payloads[0].api_key.as_deref(), Some("phc_json_compressed"));
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "implicit-compression");
+        assert_eq!(payload.items[0].distinct_id, "json-user");
+        assert_eq!(
+            payload.items[0].api_key.as_deref(),
+            Some("phc_json_compressed")
+        );
     }
 
     #[tokio::test]
@@ -635,15 +727,14 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let PostHogBatchPayload(payload): PostHogBatchPayload =
-            PostHogBatchPayload::from_request(request, &())
-                .await
-                .unwrap();
+        let payload: PostHogBatchPayload = PostHogBatchPayload::from_request(request, &())
+            .await
+            .unwrap();
 
-        assert_eq!(payload.api_key.as_deref(), Some("phc_batch"));
-        assert_eq!(payload.batch.len(), 1);
-        assert_eq!(payload.batch[0].event, "batched");
-        assert_eq!(payload.batch[0].distinct_id, "batched-user");
+        assert_eq!(payload.batch.api_key.as_deref(), Some("phc_batch"));
+        assert_eq!(payload.batch.batch.len(), 1);
+        assert_eq!(payload.batch.batch[0]["event"], "batched");
+        assert_eq!(payload.batch.batch[0]["distinct_id"], "batched-user");
     }
 
     #[tokio::test]
@@ -677,16 +768,15 @@ mod tests {
             .body(Body::from(body))
             .unwrap();
 
-        let PostHogBatchPayload(payload): PostHogBatchPayload =
-            PostHogBatchPayload::from_request(request, &())
-                .await
-                .unwrap();
+        let payload: PostHogBatchPayload = PostHogBatchPayload::from_request(request, &())
+            .await
+            .unwrap();
 
-        assert_eq!(payload.api_key.as_deref(), Some("phc_wrapped_batch"));
-        assert_eq!(payload.batch.len(), 1);
-        assert_eq!(payload.batch[0].event, "wrapped-batch");
-        assert_eq!(payload.batch[0].distinct_id, "wrapped-user");
+        assert_eq!(payload.batch.api_key.as_deref(), Some("phc_wrapped_batch"));
+        assert_eq!(payload.batch.batch.len(), 1);
+        assert_eq!(payload.batch.batch[0]["event"], "wrapped-batch");
+        assert_eq!(payload.batch.batch[0]["distinct_id"], "wrapped-user");
         let expected = chrono::Utc.with_ymd_and_hms(2025, 2, 2, 0, 0, 0).unwrap();
-        assert_eq!(payload.sent_at, Some(expected));
+        assert_eq!(payload.batch.sent_at, Some(expected));
     }
 }

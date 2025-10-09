@@ -52,7 +52,7 @@ impl PostHogResponse {
 pub struct BatchRequest {
     #[serde(default)]
     pub api_key: Option<String>,
-    pub batch: Vec<CaptureRequest>,
+    pub batch: Vec<Value>,
     #[serde(default)]
     pub sent_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -60,19 +60,41 @@ pub struct BatchRequest {
     pub extra: HashMap<String, Value>,
 }
 
-impl BatchRequest {
-    pub fn into_captures(self) -> Vec<CaptureRequest> {
-        let BatchRequest { api_key, batch, .. } = self;
-        batch
-            .into_iter()
-            .map(|mut item| {
-                if item.api_key.is_none() {
-                    item.api_key = api_key.clone();
-                }
-                item
-            })
-            .collect()
-    }
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AliasRequest {
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub distinct_id: String,
+    pub alias: String,
+    #[serde(default)]
+    pub timestamp: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct EngageRequest {
+    #[serde(default)]
+    pub api_key: Option<String>,
+    pub distinct_id: String,
+    #[serde(rename = "$set")]
+    #[serde(default)]
+    pub set: Option<Value>,
+    #[serde(rename = "$set_once")]
+    #[serde(default)]
+    pub set_once: Option<Value>,
+    #[serde(rename = "$unset")]
+    #[serde(default)]
+    pub unset: Option<Value>,
+    #[serde(rename = "$group_set")]
+    #[serde(default)]
+    pub group_set: Option<Value>,
+    #[serde(default)]
+    pub timestamp: Option<DateTime<Utc>>,
+    #[serde(default)]
+    #[serde(flatten)]
+    pub extra: HashMap<String, Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -227,24 +249,21 @@ mod tests {
     }
 
     #[test]
-    fn batch_request_applies_shared_api_key() {
-        let payload = BatchRequest {
-            api_key: Some("phc_batch".to_string()),
-            batch: vec![CaptureRequest {
-                api_key: None,
-                event: "batched".to_string(),
-                distinct_id: "xyz".to_string(),
-                properties: None,
-                timestamp: None,
-                context: None,
-                extra: HashMap::new(),
-            }],
-            sent_at: None,
-            extra: HashMap::new(),
+    fn alias_request_serializes() {
+        let mut extra = HashMap::new();
+        extra.insert("source".to_string(), Value::String("mobile".to_string()));
+        let payload = AliasRequest {
+            api_key: Some("phc_alias".to_string()),
+            distinct_id: "primary".to_string(),
+            alias: "secondary".to_string(),
+            timestamp: Some(Utc.timestamp_millis_opt(1_696_001_000_000).unwrap()),
+            extra: extra.clone(),
         };
 
-        let captures = payload.into_captures();
-        assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].api_key.as_deref(), Some("phc_batch"));
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value["distinct_id"], "primary");
+        assert_eq!(value["alias"], "secondary");
+        assert_eq!(value["api_key"], "phc_alias");
+        assert_eq!(value["source"], json!("mobile"));
     }
 }

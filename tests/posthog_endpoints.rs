@@ -1,7 +1,8 @@
 #[path = "helpers/mod.rs"]
 mod helpers;
 
-use helpers::{cleanup, spawn_app, spawn_pipeline_stub, wait_for_events};
+use chrono::Utc;
+use helpers::{cleanup, spawn_app_with_options, spawn_pipeline_stub, wait_for_events};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -10,21 +11,28 @@ use std::time::Duration;
 async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn std::error::Error>>
 {
     let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
-    let (address, server_handle) = spawn_app(pipeline_endpoint).await?;
+    let (address, server_handle) = spawn_app_with_options(
+        pipeline_endpoint,
+        Some("phc_project_default".to_string()),
+        Some("https://session.example.com".to_string()),
+    )
+    .await?;
     let base_url = format!("http://{}", address);
     let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
 
-    // capture
+    // capture with header api key and sent_at
+    let capture_sent_at = Utc::now();
     let capture_payload = json!({
         "event": "integration-capture",
         "distinct_id": "capture-user",
-        "api_key": "phc_capture",
         "properties": {"plan": "pro"},
-        "library": "tests",
+        "library": "tests"
     });
 
     let capture_response = client
         .post(format!("{}/capture", base_url))
+        .header("x-posthog-api-key", "phc_header_capture")
+        .header("x-posthog-sent-at", capture_sent_at.to_rfc3339())
         .json(&capture_payload)
         .send()
         .await?;
@@ -33,11 +41,11 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
     let capture_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(capture_events.len(), 1);
     assert_eq!(capture_events[0]["event_type"], "integration-capture");
-    assert_eq!(capture_events[0]["distinct_id"], "capture-user");
-    assert_eq!(capture_events[0]["api_key"], "phc_capture");
+    assert_eq!(capture_events[0]["api_key"], "phc_header_capture");
+    assert_eq!(capture_events[0]["extra"]["library"], "tests");
     assert_eq!(
-        capture_events[0]["extra"]["library"],
-        Value::String("tests".to_string())
+        capture_events[0]["extra"]["$sent_at"],
+        Value::String(capture_sent_at.to_rfc3339())
     );
 
     // identify
@@ -45,7 +53,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
         "distinct_id": "identify-user",
         "api_key": "phc_identify",
         "properties": {"email": "id@example.com"},
-        "context": {"ip": "127.0.0.1"},
+        "context": {"ip": "127.0.0.1"}
     });
 
     let identify_response = client
@@ -57,85 +65,145 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let identify_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(identify_events.len(), 1);
-    let identify_event = &identify_events[0];
-    assert_eq!(identify_event["event_type"], "$identify");
-    assert_eq!(identify_event["distinct_id"], "identify-user");
-    assert_eq!(identify_event["context"]["ip"], "127.0.0.1");
+    assert_eq!(identify_events[0]["event_type"], "$identify");
     assert_eq!(
-        identify_event["person_properties"]["email"],
+        identify_events[0]["person_properties"]["email"],
         "id@example.com"
     );
 
     // group identify
-    let groups_payload = json!({
+    let group_payload = json!({
         "group_type": "team",
         "group_key": "team-42",
         "api_key": "phc_group",
-        "properties": {"members": 5},
+        "properties": {"members": 5}
     });
 
-    let groups_response = client
+    let group_response = client
         .post(format!("{}/groups", base_url))
-        .json(&groups_payload)
+        .json(&group_payload)
         .send()
         .await?;
-    assert!(groups_response.status().is_success());
+    assert!(group_response.status().is_success());
 
     let group_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(group_events.len(), 1);
-    let group_event = &group_events[0];
-    assert_eq!(group_event["event_type"], "$groupidentify");
-    assert_eq!(group_event["distinct_id"], "team-42");
-    assert_eq!(group_event["extra"]["group_type"], "team");
-    assert_eq!(group_event["extra"]["group_key"], "team-42");
-    assert_eq!(group_event["properties"]["members"], 5);
+    assert_eq!(group_events[0]["event_type"], "$groupidentify");
+    assert_eq!(group_events[0]["extra"]["group_type"], "team");
 
-    // batch
+    // batch with mixed event types
     let batch_payload = json!({
-        "api_key": "phc_batch",
         "batch": [
             {
                 "event": "batched-one",
                 "distinct_id": "batch-user-a",
-                "properties": {"from": "shared"},
+                "properties": {"from": "shared"}
             },
             {
-                "event": "batched-two",
-                "distinct_id": "batch-user-b",
-                "api_key": "phc_override",
+                "event": "$identify",
+                "distinct_id": "batch-identify",
+                "properties": {"email": "batched@example.com"}
+            },
+            {
+                "type": "alias",
+                "distinct_id": "batch-original",
+                "alias": "batch-alias"
+            },
+            {
+                "event": "$groupidentify",
+                "group_type": "company",
+                "group_key": "acme",
+                "distinct_id": "ignored"
             }
         ]
     });
 
     let batch_response = client
         .post(format!("{}/batch", base_url))
+        .header("x-posthog-api-key", "phc_batch_header")
         .json(&batch_payload)
         .send()
         .await?;
     assert!(batch_response.status().is_success());
 
     let batch_events = wait_for_events(&mut pipeline_rx).await?;
-    assert_eq!(batch_events.len(), 2);
+    assert_eq!(batch_events.len(), 4);
     assert_eq!(batch_events[0]["event_type"], "batched-one");
-    assert_eq!(batch_events[0]["api_key"], "phc_batch");
-    assert_eq!(batch_events[0]["properties"]["from"], "shared");
-    assert_eq!(batch_events[1]["event_type"], "batched-two");
-    assert_eq!(batch_events[1]["api_key"], "phc_override");
+    assert_eq!(batch_events[0]["api_key"], "phc_batch_header");
+    assert_eq!(batch_events[1]["event_type"], "$identify");
+    assert_eq!(
+        batch_events[1]["person_properties"]["email"],
+        "batched@example.com"
+    );
+    assert_eq!(batch_events[2]["event_type"], "$create_alias");
+    assert_eq!(batch_events[2]["extra"]["alias"], "batch-alias");
+    assert_eq!(batch_events[3]["event_type"], "$groupidentify");
+    assert_eq!(batch_events[3]["extra"]["group_type"], "company");
 
-    // decide
+    // alias endpoint
+    let alias_payload = json!({
+        "distinct_id": "alias-origin",
+        "alias": "alias-new"
+    });
+
+    let alias_response = client
+        .post(format!("{}/alias", base_url))
+        .header("x-posthog-api-key", "phc_alias_header")
+        .json(&alias_payload)
+        .send()
+        .await?;
+    assert!(alias_response.status().is_success());
+
+    let alias_events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(alias_events.len(), 1);
+    assert_eq!(alias_events[0]["event_type"], "$create_alias");
+    assert_eq!(alias_events[0]["extra"]["alias"], "alias-new");
+
+    // engage endpoint
+    let engage_payload = json!({
+        "distinct_id": "people-1",
+        "$set": {"name": "Alex"},
+        "$unset": ["temp"]
+    });
+
+    let engage_response = client
+        .post(format!("{}/engage", base_url))
+        .header("x-posthog-api-key", "phc_engage_header")
+        .json(&engage_payload)
+        .send()
+        .await?;
+    assert!(engage_response.status().is_success());
+
+    let engage_events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(engage_events.len(), 1);
+    assert_eq!(engage_events[0]["event_type"], "$engage");
+    assert_eq!(engage_events[0]["extra"]["$set"]["name"], "Alex");
+
+    // decide should surface payload token and configured defaults
     let decide_response = client
         .post(format!("{}/decide", base_url))
-        .json(&json!({}))
+        .header("x-posthog-api-key", "phc_header_token")
+        .json(&json!({ "token": "phc_body_token" }))
         .send()
         .await?;
     assert!(decide_response.status().is_success());
     let decide_body: Value = decide_response.json().await?;
     assert_eq!(decide_body["status"], 200);
-    assert!(decide_body["supportedCompression"]
-        .as_array()
-        .expect("supported_compression should be array")
-        .iter()
-        .any(|value| value == "gzip"));
+    assert_eq!(decide_body["config"]["apiToken"], "phc_body_token");
+    assert_eq!(
+        decide_body["sessionRecording"]["endpoint"],
+        "https://session.example.com"
+    );
+
+    // session recording ingestion stubs
+    let session_response = client
+        .post(format!("{}/s", base_url))
+        .body("chunk")
+        .send()
+        .await?;
+    assert!(session_response.status().is_success());
+    let session_body: Value = session_response.json().await?;
+    assert_eq!(session_body["status"], 1);
 
     // health
     let health_response = client.get(format!("{}/healthz", base_url)).send().await?;

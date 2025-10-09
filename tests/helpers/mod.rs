@@ -40,8 +40,17 @@ pub async fn spawn_pipeline_stub(
     Ok((endpoint, receiver, handle))
 }
 
+#[allow(dead_code)]
 pub async fn spawn_app(
     pipeline_endpoint: Url,
+) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
+    spawn_app_with_options(pipeline_endpoint, None, None).await
+}
+
+pub async fn spawn_app_with_options(
+    pipeline_endpoint: Url,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
     let pipeline_client = PipelineClient::new(pipeline_endpoint, None, Duration::from_secs(5))?;
 
@@ -51,7 +60,14 @@ pub async fn spawn_app(
     let server_handle = tokio::spawn({
         let pipeline = Arc::new(pipeline_client);
         async move {
-            if let Err(err) = hogflare::serve(listener, pipeline).await {
+            if let Err(err) = hogflare::serve_with_options(
+                listener,
+                pipeline,
+                decide_api_token,
+                session_recording_endpoint,
+            )
+            .await
+            {
                 eprintln!("hogflare server terminated: {err}");
             }
         }

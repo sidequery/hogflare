@@ -7,7 +7,10 @@ use serde_json::Value;
 use thiserror::Error;
 use tracing::instrument;
 
-use crate::models::{hash_map_is_empty, CaptureRequest, GroupIdentifyRequest, IdentifyRequest};
+use crate::models::{
+    hash_map_is_empty, AliasRequest, CaptureRequest, EngageRequest, GroupIdentifyRequest,
+    IdentifyRequest,
+};
 
 #[derive(Clone)]
 pub struct PipelineClient {
@@ -125,6 +128,60 @@ impl PipelineEvent {
             extra,
         }
     }
+
+    pub fn from_alias(payload: AliasRequest) -> Self {
+        let mut extra = payload.extra;
+        extra.insert("alias".to_string(), Value::String(payload.alias.clone()));
+
+        Self {
+            source: "posthog",
+            event_type: "$create_alias".to_string(),
+            distinct_id: payload.distinct_id,
+            timestamp: payload.timestamp,
+            properties: None,
+            context: None,
+            person_properties: None,
+            api_key: payload.api_key,
+            extra,
+        }
+    }
+
+    pub fn from_engage(payload: EngageRequest) -> Self {
+        let mut extra = payload.extra;
+        if let Some(set) = payload.set {
+            extra.insert("$set".to_string(), set);
+        }
+        if let Some(set_once) = payload.set_once {
+            extra.insert("$set_once".to_string(), set_once);
+        }
+        if let Some(unset) = payload.unset {
+            extra.insert("$unset".to_string(), unset);
+        }
+        if let Some(group_set) = payload.group_set {
+            extra.insert("$group_set".to_string(), group_set);
+        }
+
+        Self {
+            source: "posthog",
+            event_type: "$engage".to_string(),
+            distinct_id: payload.distinct_id,
+            timestamp: payload.timestamp,
+            properties: None,
+            context: None,
+            person_properties: None,
+            api_key: payload.api_key,
+            extra,
+        }
+    }
+
+    pub fn with_sent_at(mut self, sent_at: Option<DateTime<Utc>>) -> Self {
+        if let Some(sent_at) = sent_at {
+            self.extra
+                .entry("$sent_at".to_string())
+                .or_insert(Value::String(sent_at.to_rfc3339()));
+        }
+        self
+    }
 }
 
 #[derive(Debug, Error)]
@@ -172,5 +229,45 @@ mod tests {
             event.extra.get("group_key"),
             Some(&Value::String("group_1".to_string()))
         );
+    }
+
+    #[test]
+    fn converts_alias_payload() {
+        let mut extra = std::collections::HashMap::new();
+        extra.insert("source".to_string(), Value::String("sdk".to_string()));
+
+        let payload = AliasRequest {
+            api_key: Some("phc_alias".to_string()),
+            distinct_id: "primary".to_string(),
+            alias: "secondary".to_string(),
+            timestamp: Some(chrono::Utc.timestamp_millis_opt(1_700_000_000_000).unwrap()),
+            extra,
+        };
+
+        let event = PipelineEvent::from_alias(payload);
+        assert_eq!(event.event_type, "$create_alias");
+        assert_eq!(event.distinct_id, "primary");
+        assert_eq!(
+            event.extra.get("alias"),
+            Some(&Value::String("secondary".to_string()))
+        );
+    }
+
+    #[test]
+    fn converts_engage_payload() {
+        let payload = EngageRequest {
+            api_key: Some("phc_people".to_string()),
+            distinct_id: "user_123".to_string(),
+            set: Some(json!({ "name": "Alex" })),
+            set_once: Some(json!({ "created_at": "2024-01-01" })),
+            unset: Some(json!(["tmp"])),
+            group_set: Some(json!({ "company": "sidequery" })),
+            timestamp: None,
+            extra: std::collections::HashMap::new(),
+        };
+
+        let event = PipelineEvent::from_engage(payload);
+        assert_eq!(event.event_type, "$engage");
+        assert_eq!(event.extra.get("$set").unwrap(), &json!({ "name": "Alex" }));
     }
 }

@@ -13,6 +13,8 @@ pub struct Config {
     pub pipeline_endpoint: Url,
     pub pipeline_auth_token: Option<String>,
     pub pipeline_timeout: Duration,
+    pub posthog_project_api_key: Option<String>,
+    pub session_recording_endpoint: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -68,11 +70,16 @@ impl Config {
             }
         };
 
+        let posthog_project_api_key = env::var("POSTHOG_API_KEY").ok();
+        let session_recording_endpoint = env::var("POSTHOG_SESSION_RECORDING_ENDPOINT").ok();
+
         Ok(Self {
             address,
             pipeline_endpoint,
             pipeline_auth_token,
             pipeline_timeout,
+            posthog_project_api_key,
+            session_recording_endpoint,
         })
     }
 }
