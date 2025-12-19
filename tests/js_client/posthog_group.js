@@ -3,9 +3,10 @@ import { setupPosthog, waitForFlush } from './setup.js';
 async function main() {
   const { posthog } = await setupPosthog();
 
-  posthog.capture('js-integration-test', {
-    framework: 'integration',
-    client: 'posthog-js',
+  posthog.group('company', 'acme-corp', {
+    name: 'Acme Corporation',
+    industry: 'Technology',
+    employee_count: 500,
   });
 
   await waitForFlush();

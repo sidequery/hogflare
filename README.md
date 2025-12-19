@@ -1,6 +1,6 @@
 # Hogflare
 
-![Hogflare](hog.png)
+<img src="hog.png" alt="Hogflare" width="300">
 
 An Axum-based PostHog compatible ingestion layer that forwards events to a Cloudflare Pipeline HTTP stream. The service supports the `/capture` and `/identify` endpoints so existing PostHog SDKs can drop-in with minimal configuration changes.
 
