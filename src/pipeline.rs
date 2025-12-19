@@ -5,7 +5,7 @@ use reqwest::{Client, StatusCode, Url};
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::models::{
     hash_map_is_empty, AliasRequest, CaptureRequest, EngageRequest, GroupIdentifyRequest,
@@ -37,7 +37,7 @@ impl PipelineClient {
         })
     }
 
-    #[instrument(skip(self, events))]
+    #[instrument(skip(self, events), fields(event_count = events.len()))]
     pub async fn send(&self, events: Vec<PipelineEvent>) -> Result<(), PipelineError> {
         let mut request = self.client.post(self.endpoint.clone()).json(&events);
 
@@ -46,12 +46,19 @@ impl PipelineClient {
         }
 
         let response = request.send().await.map_err(PipelineError::Transport)?;
+        let status = response.status();
 
-        if !response.status().is_success() {
-            let status = response.status();
+        if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
             return Err(PipelineError::UnexpectedResponse { status, body });
         }
+
+        let body = response.text().await.unwrap_or_default();
+        info!(
+            status = %status,
+            response = %body,
+            "pipeline request successful"
+        );
 
         Ok(())
     }

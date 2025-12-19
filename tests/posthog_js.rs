@@ -1,7 +1,7 @@
 #[path = "helpers/mod.rs"]
 mod helpers;
 
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 
 use helpers::{
     cleanup, spawn_app, spawn_app_with_options, spawn_pipeline_stub, start_docker_pipeline,
@@ -15,8 +15,6 @@ use tokio::process::Command;
 async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std::error::Error>> {
     let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
     let (address, server_handle) = spawn_app(pipeline_endpoint).await?;
-
-    ensure_js_dependencies_installed().await?;
 
     let status = Command::new("bun")
         .arg("run")
@@ -60,8 +58,6 @@ async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error::Error>> {
-    ensure_js_dependencies_installed().await?;
-
     let (pipeline_base, _pipeline_guard) = start_docker_pipeline().await?;
 
     let test_result = async {
@@ -111,23 +107,4 @@ async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error:
 
     stop_docker_pipeline().await.ok();
     test_result
-}
-
-async fn ensure_js_dependencies_installed() -> Result<(), Box<dyn std::error::Error>> {
-    let node_modules = Path::new("tests/js_client/node_modules");
-    if node_modules.exists() {
-        return Ok(());
-    }
-
-    let status = Command::new("bun")
-        .arg("install")
-        .current_dir("tests/js_client")
-        .status()
-        .await?;
-
-    if !status.success() {
-        return Err(format!("bun install failed with status {status:?}").into());
-    }
-
-    Ok(())
 }
