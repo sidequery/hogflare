@@ -3,9 +3,10 @@ import { setupPosthog, waitForFlush } from './setup.js';
 async function main() {
   const { posthog } = await setupPosthog();
 
-  posthog.capture('js-integration-test', {
-    framework: 'integration',
-    client: 'posthog-js',
+  posthog.identify('identified-user-123', {
+    email: 'test@example.com',
+    name: 'Test User',
+    plan: 'enterprise',
   });
 
   await waitForFlush();

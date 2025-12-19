@@ -235,6 +235,7 @@ async fn capture(
 /// Browser SDK sends events to /e/ with a different format:
 /// - `token` instead of `api_key`
 /// - `distinct_id` may be in `properties.$distinct_id` or `properties.distinct_id`
+/// - `$set` and `$set_once` are top-level fields for identify events
 #[derive(Debug, Deserialize)]
 struct BrowserCaptureRequest {
     #[serde(default)]
@@ -248,6 +249,12 @@ struct BrowserCaptureRequest {
     properties: Option<Value>,
     #[serde(default)]
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(rename = "$set")]
+    #[serde(default)]
+    set: Option<Value>,
+    #[serde(rename = "$set_once")]
+    #[serde(default)]
+    set_once: Option<Value>,
 }
 
 async fn browser_capture(
@@ -256,13 +263,14 @@ async fn browser_capture(
     body: Bytes,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = header_sent_at(&headers);
+
     let payload: BrowserCaptureRequest =
         serde_json::from_slice(&body).map_err(|e| AppError::InvalidPayload(e.to_string()))?;
 
     let api_key = payload.token.or(payload.api_key).or_else(|| header_api_key(&headers));
 
     // Extract distinct_id from payload or properties
-    let distinct_id = payload.distinct_id.or_else(|| {
+    let distinct_id = payload.distinct_id.clone().or_else(|| {
         payload.properties.as_ref().and_then(|props| {
             props
                 .get("$distinct_id")
@@ -272,19 +280,56 @@ async fn browser_capture(
         })
     });
 
-    let distinct_id = distinct_id.ok_or_else(|| AppError::InvalidPayload("missing distinct_id".into()))?;
+    let distinct_id =
+        distinct_id.ok_or_else(|| AppError::InvalidPayload("missing distinct_id".into()))?;
 
-    let capture_req = CaptureRequest {
-        api_key,
-        event: payload.event,
-        distinct_id,
-        properties: payload.properties,
-        timestamp: payload.timestamp,
-        context: None,
-        extra: std::collections::HashMap::new(),
+    // Handle $identify events specially - use top-level $set as person_properties
+    let event = if payload.event == "$identify" {
+        let identify_req = IdentifyRequest {
+            api_key,
+            distinct_id,
+            properties: payload.set.clone(),
+            timestamp: payload.timestamp,
+            context: None,
+            extra: std::collections::HashMap::new(),
+        };
+        PipelineEvent::from_identify(identify_req)
+    } else if payload.event == "$groupidentify" {
+        // Handle group identify - extract group_type and group_key from $set
+        let props = payload.properties.as_ref();
+        let group_type = props
+            .and_then(|p| p.get("$group_type").and_then(Value::as_str))
+            .unwrap_or("unknown")
+            .to_string();
+        let group_key = props
+            .and_then(|p| p.get("$group_key").and_then(Value::as_str))
+            .unwrap_or("unknown")
+            .to_string();
+        let group_properties = props.and_then(|p| p.get("$group_set").cloned());
+
+        let group_req = GroupIdentifyRequest {
+            api_key,
+            group_type,
+            group_key,
+            properties: group_properties,
+            timestamp: payload.timestamp,
+            extra: std::collections::HashMap::new(),
+        };
+        PipelineEvent::from_group_identify(group_req)
+    } else {
+        let capture_req = CaptureRequest {
+            api_key,
+            event: payload.event,
+            distinct_id,
+            properties: payload.properties,
+            timestamp: payload.timestamp,
+            context: None,
+            extra: std::collections::HashMap::new(),
+        };
+        PipelineEvent::from_capture(capture_req)
     };
 
-    let event = PipelineEvent::from_capture(capture_req).with_sent_at(sent_at);
+    let event = event.with_sent_at(sent_at);
     state.pipeline.send(vec![event]).await?;
     Ok(Json(PostHogResponse::success()))
 }
