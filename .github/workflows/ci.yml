@@ -24,13 +24,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v1
-        with:
-          bun-version: '1.2.2'
-
-      - name: Install JS test dependencies
-        working-directory: tests/js_client
-        run: bun install
+        uses: oven-sh/setup-bun@v2
 
       - name: Verify Docker Compose
         run: docker compose version

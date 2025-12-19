@@ -13,6 +13,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 use config::{Config, ConfigError};
 use extractors::{
     header_api_key, header_sent_at, verify_signature, PostHogBatchPayload, PostHogPayload,
@@ -88,7 +90,10 @@ impl From<extractors::PayloadExtractorError> for AppError {
 }
 
 pub async fn run() -> Result<(), RunError> {
-    dotenvy::dotenv().ok();
+    // Load .env.local first, then .env as fallback
+    dotenvy::from_filename(".env.local")
+        .or_else(|_| dotenvy::dotenv())
+        .ok();
     init_tracing();
 
     let config = Config::from_env()?;
@@ -101,6 +106,13 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
         config.pipeline_auth_token.clone(),
         config.pipeline_timeout,
     )?;
+
+    info!(
+        endpoint = %config.pipeline_endpoint,
+        auth_configured = config.pipeline_auth_token.is_some(),
+        timeout_secs = config.pipeline_timeout.as_secs(),
+        "pipeline client configured"
+    );
 
     let listener = TcpListener::bind(config.address).await?;
     info!(address = %config.address, "listening for requests");
@@ -156,15 +168,24 @@ pub async fn serve_with_options(
 fn router(state: AppState) -> Router {
     Router::new()
         .route("/capture", post(capture))
+        .route("/e", post(browser_capture))
+        .route("/e/", post(browser_capture))
         .route("/identify", post(identify))
         .route("/batch", post(batch))
         .route("/groups", post(groups))
         .route("/alias", post(alias))
         .route("/engage", post(engage))
         .route("/decide", post(decide))
+        .route("/flags", post(decide))
+        .route("/flags/", post(decide))
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
         .route("/healthz", get(health))
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(DefaultOnResponse::new().level(Level::INFO)),
+        )
         .with_state(state)
 }
 
@@ -208,6 +229,63 @@ async fn capture(
         .map(|item| PipelineEvent::from_capture(item).with_sent_at(sent_at.clone()))
         .collect();
     state.pipeline.send(events).await?;
+    Ok(Json(PostHogResponse::success()))
+}
+
+/// Browser SDK sends events to /e/ with a different format:
+/// - `token` instead of `api_key`
+/// - `distinct_id` may be in `properties.$distinct_id` or `properties.distinct_id`
+#[derive(Debug, Deserialize)]
+struct BrowserCaptureRequest {
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    api_key: Option<String>,
+    event: String,
+    #[serde(default)]
+    distinct_id: Option<String>,
+    #[serde(default)]
+    properties: Option<Value>,
+    #[serde(default)]
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+async fn browser_capture(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<PostHogResponse>, AppError> {
+    let sent_at = header_sent_at(&headers);
+    let payload: BrowserCaptureRequest =
+        serde_json::from_slice(&body).map_err(|e| AppError::InvalidPayload(e.to_string()))?;
+
+    let api_key = payload.token.or(payload.api_key).or_else(|| header_api_key(&headers));
+
+    // Extract distinct_id from payload or properties
+    let distinct_id = payload.distinct_id.or_else(|| {
+        payload.properties.as_ref().and_then(|props| {
+            props
+                .get("$distinct_id")
+                .or_else(|| props.get("distinct_id"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        })
+    });
+
+    let distinct_id = distinct_id.ok_or_else(|| AppError::InvalidPayload("missing distinct_id".into()))?;
+
+    let capture_req = CaptureRequest {
+        api_key,
+        event: payload.event,
+        distinct_id,
+        properties: payload.properties,
+        timestamp: payload.timestamp,
+        context: None,
+        extra: std::collections::HashMap::new(),
+    };
+
+    let event = PipelineEvent::from_capture(capture_req).with_sent_at(sent_at);
+    state.pipeline.send(vec![event]).await?;
     Ok(Json(PostHogResponse::success()))
 }
 

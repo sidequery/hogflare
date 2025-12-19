@@ -1,5 +1,7 @@
 # Hogflare
 
+![Hogflare](hog.png)
+
 An Axum-based PostHog compatible ingestion layer that forwards events to a Cloudflare Pipeline HTTP stream. The service supports the `/capture` and `/identify` endpoints so existing PostHog SDKs can drop-in with minimal configuration changes.
 
 ## Getting started
@@ -7,8 +9,9 @@ An Axum-based PostHog compatible ingestion layer that forwards events to a Cloud
 ### Prerequisites
 
 * Rust toolchain (`cargo`, `rustc`)
-* A Cloudflare account with Pipelines and R2 enabled
-* An existing HTTP pipeline endpoint created via the Cloudflare Pipelines quickstart (see below)
+* Docker (for Cloudflare Container deployment)
+* Node.js and npm/bun (for Cloudflare Workers deployment)
+* A Cloudflare account with Pipelines, R2, and Containers enabled
 
 ### Configuration
 
@@ -52,7 +55,7 @@ The emulator listens on `http://127.0.0.1:8088/`. Hogflare tests use this servic
 docker compose down --remove-orphans
 ```
 
-### Endpoint coverage checklist
+### Endpoint coverage
 
 - [x] Event capture `/capture` (JSON or form payloads, header/body API keys, gzip/deflate/gzip-js compression)
 - [x] Identify `/identify` (forwards `$identify`, applies shared API keys)
@@ -63,47 +66,44 @@ docker compose down --remove-orphans
 - [x] Decide `/decide` (returns placeholder flag payload, surfaces project API key and session recording endpoint)
 - [x] Session recording `/s` (validates HMAC when configured, forwards `$snapshot` chunks)
 - [x] Health probe `/healthz` (simple liveness response)
-- [ ] Feature flag evaluation `/api/feature_flag/` (only placeholder `/decide`)
-- [ ] Cohorts, experiments, insights, funnels, trends, retention, breakdown, stickiness (`/api/cohort/`, `/api/insight/`, etc.)
-- [ ] Query endpoints (`/api/query/`, `/api/projects/:id/query/`) and HogQL
-- [ ] Plugin ingestion `/api/plugin/` (lifecycle events, scheduled tasks)
-- [ ] Background export jobs `/api/exports/` (CSV/Parquet exports)
-- [ ] Session replay file storage (snapshots proxied, no persistence)
-- [ ] Dashboard analytics (dashboards, annotations, alerts)
-- [ ] Webhooks and action-based notifications
-- [ ] Management endpoints (users, organizations, projects)
-- [ ] PostHog Cloud billing and license APIs
 
 All handlers return PostHog-compatible responses (`{"status": 1}` success, `{"status": 0}` failure).
 
-### Wiring Cloudflare Pipelines
+Hogflare aims to be drop-in compatible with common PostHog SDK calls, but a few behaviours differ from the official PostHog server:
 
-Follow Cloudflare's tutorial to provision the required resources:
+* **Session recording storage**: `/s` forwards snapshots to the pipeline, but replay requires a downstream sink that understands the payload format.
+* **Feature flag resolution**: `/decide` returns static placeholders rather than running flag evaluation.
+* **Plugin / ingestion pipeline hooks**: PostHog plugins and data transformation hooks are not executed.
+* **Legacy endpoints**: older `/api/event/` and SDK-specific routes proxy through `/capture`; add dedicated handlers if you rely on them.
 
-1. Create an R2 bucket and enable the data catalog:
+### Deploying to Cloudflare
+
+1. Set up Cloudflare infrastructure (R2 bucket and Pipeline):
    ```bash
-   npx wrangler login
-   npx wrangler r2 bucket create pipelines-tutorial
-   npx wrangler r2 bucket catalog enable pipelines-tutorial
+   ./scripts/setup-cloudflare.sh
    ```
-2. Create an API token with R2 catalog permissions via the Cloudflare dashboard.
-3. Define the schema for your ingestion stream (for example, the ecommerce schema used in the tutorial) and run the interactive setup:
-   ```bash
-   cat > schema.json <<'JSON'
-   {
-     "fields": [
-       { "name": "user_id", "type": "string", "required": true },
-       { "name": "event_type", "type": "string", "required": true },
-       { "name": "product_id", "type": "string", "required": false },
-       { "name": "amount", "type": "float64", "required": false }
-     ]
-   }
-   JSON
 
-   npx wrangler pipelines setup
+2. Run the interactive pipeline setup:
+   ```bash
+   bunx wrangler pipelines setup
    ```
-4. When prompted during setup, enable the HTTP endpoint and choose the Data Catalog table sink. Copy the generated endpoint URL and (if required) the authentication token – these values populate `CLOUDFLARE_PIPELINE_ENDPOINT` and `CLOUDFLARE_PIPELINE_AUTH_TOKEN` for the Axum service.
-5. Point your PostHog SDKs at the Axum service. Captured events and identifies are transformed into a Cloudflare-friendly payload and relayed to the pipeline. Data will appear in the configured R2 bucket as Apache Iceberg files.
+   Use the generated `scripts/pipeline-schema.json` file and note the endpoint URL and auth token.
+
+3. Create `.env.local` with your credentials:
+   ```bash
+   cp .env.local .env.local
+   # Edit .env.local and fill in:
+   # - CLOUDFLARE_PIPELINE_ENDPOINT
+   # - CLOUDFLARE_PIPELINE_AUTH_TOKEN
+   ```
+
+4. Install dependencies and deploy:
+   ```bash
+   bun install
+   bunx wrangler deploy
+   ```
+
+The service will be deployed as a Cloudflare Container managed by a Worker. Environment variables are loaded from `.env.local`.
 
 ### Sending sample data
 
@@ -137,14 +137,3 @@ LIMIT 10
 ```
 
 Refer to the [Cloudflare Pipelines documentation](https://developers.cloudflare.com/pipelines/) for more advanced configurations, retention policies, and integrating additional sinks.
-
-## Compatibility notes
-
-Hogflare aims to be drop-in compatible with common PostHog SDK calls, but a few behaviours are still pending:
-
-* **Session recording storage** – `/s` forwards snapshots to the pipeline, but replay still requires a downstream sink that understands the payload format.
-* **Feature flag resolution** – `/decide` returns static placeholders rather than running flag evaluation.
-* **Plugin / ingestion pipeline hooks** – PostHog plugins and data transformation hooks are not executed.
-* **Legacy endpoints** – older `/api/event/` and SDK-specific routes still proxy through `/capture`; add dedicated handlers if you rely on them.
-
-Pull requests covering these gaps are welcome.
