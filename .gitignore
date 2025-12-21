@@ -6,3 +6,6 @@ tests/js_client/node_modules/
 .env.local
 .wrangler/
 dist/
+wrangler.toml
+scripts/setup-cloudflare.sh
+.claude/
