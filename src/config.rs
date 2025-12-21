@@ -1,10 +1,9 @@
-use std::{
-    env::{self, VarError},
-    net::SocketAddr,
-    time::Duration,
-};
+use std::{net::SocketAddr, time::Duration};
 
-use reqwest::Url;
+#[cfg(not(target_arch = "wasm32"))]
+use std::env::{self, VarError};
+
+use url::Url;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -31,6 +30,73 @@ pub enum ConfigError {
 }
 
 impl Config {
+    #[cfg(target_arch = "wasm32")]
+    pub fn from_worker_env(env: &worker::Env) -> Result<Self, ConfigError> {
+        let address: SocketAddr = "0.0.0.0:8080"
+            .parse::<SocketAddr>()
+            .map_err(|err| {
+            ConfigError::InvalidSocketAddress {
+                value: "0.0.0.0:8080".to_string(),
+                message: err.to_string(),
+            }
+        })?;
+
+        let raw_endpoint = env
+            .var("CLOUDFLARE_PIPELINE_ENDPOINT")
+            .map_err(|_| ConfigError::MissingVar("CLOUDFLARE_PIPELINE_ENDPOINT"))?
+            .to_string();
+
+        let pipeline_endpoint =
+            Url::parse(&raw_endpoint).map_err(|err| ConfigError::InvalidEndpoint {
+                value: raw_endpoint.clone(),
+                message: err.to_string(),
+            })?;
+
+        let pipeline_auth_token = env
+            .secret("CLOUDFLARE_PIPELINE_AUTH_TOKEN")
+            .ok()
+            .map(|secret| secret.to_string())
+            .or_else(|| {
+                env.var("CLOUDFLARE_PIPELINE_AUTH_TOKEN")
+                    .ok()
+                    .map(|var| var.to_string())
+            });
+
+        let pipeline_timeout = match env.var("CLOUDFLARE_PIPELINE_TIMEOUT_SECS") {
+            Ok(value) => value
+                .to_string()
+                .parse::<u64>()
+                .map(Duration::from_secs)
+                .map_err(|err| ConfigError::InvalidTimeout {
+                    value: value.to_string(),
+                    message: err.to_string(),
+                })?,
+            Err(_) => Duration::from_secs(10),
+        };
+
+        let posthog_project_api_key = env.var("POSTHOG_API_KEY").ok().map(|v| v.to_string());
+        let session_recording_endpoint = env
+            .var("POSTHOG_SESSION_RECORDING_ENDPOINT")
+            .ok()
+            .map(|v| v.to_string());
+        let posthog_signing_secret = env
+            .secret("POSTHOG_SIGNING_SECRET")
+            .ok()
+            .map(|secret| secret.to_string())
+            .or_else(|| env.var("POSTHOG_SIGNING_SECRET").ok().map(|v| v.to_string()));
+
+        Ok(Self {
+            address,
+            pipeline_endpoint,
+            pipeline_auth_token,
+            pipeline_timeout,
+            posthog_project_api_key,
+            session_recording_endpoint,
+            posthog_signing_secret,
+        })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn from_env() -> Result<Self, ConfigError> {
         let address_raw = env::var("APP_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_string());
         let address: SocketAddr =

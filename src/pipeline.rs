@@ -1,11 +1,21 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use reqwest::{Client, StatusCode, Url};
+use http::StatusCode;
 use serde::Serialize;
 use serde_json::Value;
 use thiserror::Error;
 use tracing::{info, instrument};
+use url::Url;
+
+#[cfg(not(target_arch = "wasm32"))]
+use reqwest::Client;
+
+#[cfg(target_arch = "wasm32")]
+use worker::{
+    AbortController, Delay, Fetch, Headers, Method, Request, RequestInit,
+    wasm_bindgen::JsValue, wasm_bindgen_futures::spawn_local,
+};
 
 use crate::models::{
     hash_map_is_empty, AliasRequest, CaptureRequest, EngageRequest, GroupIdentifyRequest,
@@ -16,6 +26,8 @@ use crate::models::{
 pub struct PipelineClient {
     endpoint: Url,
     auth_token: Option<String>,
+    timeout: Duration,
+    #[cfg(not(target_arch = "wasm32"))]
     client: Client,
 }
 
@@ -25,6 +37,7 @@ impl PipelineClient {
         auth_token: Option<String>,
         timeout: Duration,
     ) -> Result<Self, PipelineError> {
+        #[cfg(not(target_arch = "wasm32"))]
         let client = Client::builder()
             .timeout(timeout)
             .build()
@@ -33,34 +46,98 @@ impl PipelineClient {
         Ok(Self {
             endpoint,
             auth_token,
+            timeout,
+            #[cfg(not(target_arch = "wasm32"))]
             client,
         })
     }
 
     #[instrument(skip(self, events), fields(event_count = events.len()))]
     pub async fn send(&self, events: Vec<PipelineEvent>) -> Result<(), PipelineError> {
-        let mut request = self.client.post(self.endpoint.clone()).json(&events);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut request = self.client.post(self.endpoint.clone()).json(&events);
 
-        if let Some(token) = &self.auth_token {
-            request = request.bearer_auth(token);
-        }
+            if let Some(token) = &self.auth_token {
+                request = request.bearer_auth(token);
+            }
 
-        let response = request.send().await.map_err(PipelineError::Transport)?;
-        let status = response.status();
+            let response = request.send().await.map_err(PipelineError::Transport)?;
+            let status = StatusCode::from_u16(response.status().as_u16())
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
 
-        if !status.is_success() {
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(PipelineError::UnexpectedResponse { status, body });
+            }
+
             let body = response.text().await.unwrap_or_default();
-            return Err(PipelineError::UnexpectedResponse { status, body });
+            info!(
+                status = %status,
+                response = %body,
+                "pipeline request successful"
+            );
+
+            return Ok(());
         }
 
-        let body = response.text().await.unwrap_or_default();
-        info!(
-            status = %status,
-            response = %body,
-            "pipeline request successful"
-        );
+        #[cfg(target_arch = "wasm32")]
+        {
+            let body = serde_json::to_string(&events).map_err(PipelineError::Serialize)?;
 
-        Ok(())
+            let mut headers = Headers::new();
+            headers
+                .set("content-type", "application/json")
+                .map_err(PipelineError::RequestBuild)?;
+
+            if let Some(token) = &self.auth_token {
+                headers
+                    .set("authorization", &format!("Bearer {token}"))
+                    .map_err(PipelineError::RequestBuild)?;
+            }
+
+            let mut init = RequestInit::new();
+            init.with_method(Method::Post);
+            init.with_headers(headers);
+            init.with_body(Some(JsValue::from_str(&body)));
+
+            let request =
+                Request::new_with_init(self.endpoint.as_str(), &init)
+                    .map_err(PipelineError::RequestBuild)?;
+
+            let controller = AbortController::default();
+            let signal = controller.signal();
+            let timeout = self.timeout;
+
+            if timeout.as_secs() > 0 {
+                spawn_local(async move {
+                    Delay::from(timeout).await;
+                    controller.abort();
+                });
+            }
+
+            let mut response = Fetch::Request(request)
+                .send_with_signal(&signal)
+                .await
+                .map_err(PipelineError::Transport)?;
+
+            let status = StatusCode::from_u16(response.status_code())
+                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                return Err(PipelineError::UnexpectedResponse { status, body });
+            }
+
+            let body = response.text().await.unwrap_or_default();
+            info!(
+                status = %status,
+                response = %body,
+                "pipeline request successful"
+            );
+
+            Ok(())
+        }
     }
 }
 
@@ -207,14 +284,26 @@ impl PipelineEvent {
         }
         self
     }
+
 }
 
 #[derive(Debug, Error)]
 pub enum PipelineError {
     #[error("failed to create HTTP client: {0}")]
+    #[cfg(not(target_arch = "wasm32"))]
     ClientBuild(#[source] reqwest::Error),
     #[error("failed to deliver events to Cloudflare pipeline: {0}")]
+    #[cfg(not(target_arch = "wasm32"))]
     Transport(#[source] reqwest::Error),
+    #[error("failed to deliver events to Cloudflare pipeline: {0}")]
+    #[cfg(target_arch = "wasm32")]
+    Transport(#[source] worker::Error),
+    #[error("failed to build pipeline request: {0}")]
+    #[cfg(target_arch = "wasm32")]
+    RequestBuild(#[source] worker::Error),
+    #[error("failed to serialize pipeline payload: {0}")]
+    #[cfg(target_arch = "wasm32")]
+    Serialize(#[source] serde_json::Error),
     #[error("pipeline responded with {status}: {body}")]
     UnexpectedResponse { status: StatusCode, body: String },
 }

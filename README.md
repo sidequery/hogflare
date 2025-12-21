@@ -17,9 +17,9 @@ Admittedley, Posthog does a *lot* more than this packages, but some folks really
 ### Prerequisites
 
 * Rust toolchain (`cargo`, `rustc`)
-* Docker (for Cloudflare Container deployment)
-* Node.js and npm/bun (for Cloudflare Workers deployment)
-* A Cloudflare account with Pipelines, R2, and Containers enabled
+* Docker (optional, only for the local pipeline emulator)
+* Bun (for Wrangler)
+* A Cloudflare account with Pipelines and R2 enabled
 
 ### Configuration
 
@@ -97,21 +97,22 @@ Hogflare aims to be drop-in compatible with common PostHog SDK calls, but a few 
    ```
    Use the generated `scripts/pipeline-schema.json` file and note the endpoint URL and auth token.
 
-3. Create `.env.local` with your credentials:
+3. Configure Worker variables and secrets:
    ```bash
-   cp .env.local .env.local
-   # Edit .env.local and fill in:
+   # wrangler.toml [vars] should include:
    # - CLOUDFLARE_PIPELINE_ENDPOINT
-   # - CLOUDFLARE_PIPELINE_AUTH_TOKEN
+   # - CLOUDFLARE_PIPELINE_TIMEOUT_SECS
+
+   bunx wrangler secret put CLOUDFLARE_PIPELINE_AUTH_TOKEN
+   bunx wrangler secret put POSTHOG_SIGNING_SECRET
    ```
 
-4. Install dependencies and deploy:
+4. Deploy:
    ```bash
-   bun install
    bunx wrangler deploy
    ```
 
-The service will be deployed as a Cloudflare Container managed by a Worker. Environment variables are loaded from `.env.local`.
+The service is deployed as a Rust Worker (Wasm). Runtime configuration comes from `wrangler.toml` vars and Wrangler secrets.
 
 ### Sending sample data
 
@@ -136,7 +137,7 @@ Once the pipeline writes data into R2 you can query it with R2 SQL:
 
 ```bash
 export WRANGLER_R2_SQL_AUTH_TOKEN=YOUR_API_TOKEN
-npx wrangler r2 sql query "YOUR_WAREHOUSE_NAME" "
+bunx wrangler r2 sql query "YOUR_WAREHOUSE_NAME" "
 SELECT distinct_id, event_type, properties
 FROM default.ecommerce
 ORDER BY timestamp DESC

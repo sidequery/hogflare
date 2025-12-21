@@ -13,7 +13,9 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+#[cfg(not(target_arch = "wasm32"))]
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+#[cfg(not(target_arch = "wasm32"))]
 use tracing::Level;
 use config::{Config, ConfigError};
 use extractors::{
@@ -27,8 +29,16 @@ use pipeline::{PipelineClient, PipelineError, PipelineEvent};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
-use tokio::net::TcpListener;
 use tracing::{error, info, warn};
+
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::net::TcpListener;
+
+#[cfg(target_arch = "wasm32")]
+use worker::{event, Context, Env, HttpRequest, Result as WorkerResult};
+
+#[cfg(target_arch = "wasm32")]
+use tower_service::Service;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -89,6 +99,7 @@ impl From<extractors::PayloadExtractorError> for AppError {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn run() -> Result<(), RunError> {
     // Load .env.local first, then .env as fallback
     dotenvy::from_filename(".env.local")
@@ -100,6 +111,7 @@ pub async fn run() -> Result<(), RunError> {
     run_with_config(config).await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn run_with_config(config: Config) -> Result<(), RunError> {
     let pipeline = PipelineClient::new(
         config.pipeline_endpoint.clone(),
@@ -127,6 +139,50 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
     .await
 }
 
+#[cfg(target_arch = "wasm32")]
+#[event(fetch)]
+pub async fn fetch(
+    req: HttpRequest,
+    env: Env,
+    _ctx: Context,
+) -> WorkerResult<http::Response<axum::body::Body>> {
+    let config = match Config::from_worker_env(&env) {
+        Ok(config) => config,
+        Err(err) => {
+            let body = Json(ErrorResponse {
+                status: 0,
+                error: err.to_string(),
+            });
+            return Ok((StatusCode::INTERNAL_SERVER_ERROR, body).into_response());
+        }
+    };
+
+    let pipeline = match PipelineClient::new(
+        config.pipeline_endpoint.clone(),
+        config.pipeline_auth_token.clone(),
+        config.pipeline_timeout,
+    ) {
+        Ok(client) => client,
+        Err(err) => {
+            error!(error = %err, "failed to create pipeline client");
+            let body = Json(ErrorResponse {
+                status: 0,
+                error: err.to_string(),
+            });
+            return Ok((StatusCode::INTERNAL_SERVER_ERROR, body).into_response());
+        }
+    };
+
+    let mut router = build_router_with_options(
+        Arc::new(pipeline),
+        config.posthog_project_api_key.clone(),
+        config.session_recording_endpoint.clone(),
+        config.posthog_signing_secret.clone(),
+    );
+
+    Ok(router.call(req).await?)
+}
+
 pub fn build_router(pipeline: Arc<PipelineClient>) -> Router {
     build_router_with_options(pipeline, None, None, None)
 }
@@ -145,10 +201,12 @@ pub fn build_router_with_options(
     ))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Result<(), RunError> {
     serve_with_state(listener, build_state(pipeline, None, None, None)).await
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub async fn serve_with_options(
     listener: TcpListener,
     pipeline: Arc<PipelineClient>,
@@ -166,7 +224,7 @@ pub async fn serve_with_options(
 }
 
 fn router(state: AppState) -> Router {
-    Router::new()
+    let router = Router::new()
         .route("/capture", post(capture))
         .route("/e", post(browser_capture))
         .route("/e/", post(browser_capture))
@@ -181,12 +239,16 @@ fn router(state: AppState) -> Router {
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
         .route("/healthz", get(health))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(DefaultOnResponse::new().level(Level::INFO)),
-        )
-        .with_state(state)
+        .with_state(state);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    let router = router.layer(
+        TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_response(DefaultOnResponse::new().level(Level::INFO)),
+    );
+
+    router
 }
 
 fn build_state(
@@ -203,12 +265,14 @@ fn build_state(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 async fn serve_with_state(listener: TcpListener, state: AppState) -> Result<(), RunError> {
     axum::serve(listener, router(state).into_make_service())
         .await
         .map_err(|err| RunError::Serve(err.to_string()))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -218,6 +282,10 @@ fn init_tracing() {
         .ok();
 }
 
+#[cfg(target_arch = "wasm32")]
+fn init_tracing() {}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn capture(
     State(state): State<AppState>,
     payload: PostHogPayload<CaptureRequest>,
@@ -257,6 +325,7 @@ struct BrowserCaptureRequest {
     set_once: Option<Value>,
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn browser_capture(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -334,6 +403,7 @@ async fn browser_capture(
     Ok(Json(PostHogResponse::success()))
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn identify(
     State(state): State<AppState>,
     payload: PostHogPayload<IdentifyRequest>,
@@ -348,6 +418,7 @@ async fn identify(
     Ok(Json(PostHogResponse::success()))
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn batch(
     State(state): State<AppState>,
     payload: PostHogBatchPayload,
@@ -363,6 +434,7 @@ async fn batch(
     Ok(Json(PostHogResponse::success()))
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn groups(
     State(state): State<AppState>,
     payload: PostHogPayload<GroupIdentifyRequest>,
@@ -377,6 +449,7 @@ async fn groups(
     Ok(Json(PostHogResponse::success()))
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn alias(
     State(state): State<AppState>,
     payload: PostHogPayload<AliasRequest>,
@@ -391,6 +464,7 @@ async fn alias(
     Ok(Json(PostHogResponse::success()))
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn engage(
     State(state): State<AppState>,
     payload: PostHogPayload<EngageRequest>,
@@ -413,6 +487,7 @@ struct DecideRequest {
     token: Option<String>,
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn decide(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -440,6 +515,7 @@ async fn decide(
     Json(response)
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn session_recording(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -473,6 +549,7 @@ async fn session_recording(
     Ok(Json(PostHogResponse::success()))
 }
 
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
 }
