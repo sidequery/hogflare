@@ -20,6 +20,7 @@ use tracing::Level;
 use config::{Config, ConfigError};
 use extractors::{
     header_api_key, header_sent_at, verify_signature, PostHogBatchPayload, PostHogPayload,
+    RequestEnrichment,
 };
 use models::{
     AliasRequest, BatchRequest, CaptureRequest, DecideResponse, EngageRequest, ErrorResponse,
@@ -288,13 +289,19 @@ fn init_tracing() {}
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn capture(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     payload: PostHogPayload<CaptureRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
+    let enrichment = enrichment.properties();
     let events = payload
         .items
         .into_iter()
-        .map(|item| PipelineEvent::from_capture(item).with_sent_at(sent_at.clone()))
+        .map(|item| {
+            PipelineEvent::from_capture(item)
+                .with_sent_at(sent_at.clone())
+                .with_enrichment(enrichment)
+        })
         .collect();
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
@@ -328,10 +335,12 @@ struct BrowserCaptureRequest {
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn browser_capture(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = header_sent_at(&headers);
+    let enrichment = enrichment.properties();
 
     let payload: BrowserCaptureRequest =
         serde_json::from_slice(&body).map_err(|e| AppError::InvalidPayload(e.to_string()))?;
@@ -398,7 +407,9 @@ async fn browser_capture(
         PipelineEvent::from_capture(capture_req)
     };
 
-    let event = event.with_sent_at(sent_at);
+    let event = event
+        .with_sent_at(sent_at)
+        .with_enrichment(enrichment);
     state.pipeline.send(vec![event]).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -406,13 +417,19 @@ async fn browser_capture(
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn identify(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     payload: PostHogPayload<IdentifyRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
+    let enrichment = enrichment.properties();
     let events = payload
         .items
         .into_iter()
-        .map(|item| PipelineEvent::from_identify(item).with_sent_at(sent_at.clone()))
+        .map(|item| {
+            PipelineEvent::from_identify(item)
+                .with_sent_at(sent_at.clone())
+                .with_enrichment(enrichment)
+        })
         .collect();
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
@@ -421,14 +438,20 @@ async fn identify(
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn batch(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     payload: PostHogBatchPayload,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.batch.sent_at.clone();
     let shared_api_key = payload.batch.api_key.clone();
+    let enrichment = enrichment.properties();
     let events = convert_batch(payload.batch, shared_api_key)
         .map_err(AppError::InvalidPayload)?
         .into_iter()
-        .map(|event| event.with_sent_at(sent_at.clone()))
+        .map(|event| {
+            event
+                .with_sent_at(sent_at.clone())
+                .with_enrichment(enrichment)
+        })
         .collect();
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
@@ -437,13 +460,19 @@ async fn batch(
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn groups(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     payload: PostHogPayload<GroupIdentifyRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
+    let enrichment = enrichment.properties();
     let events = payload
         .items
         .into_iter()
-        .map(|item| PipelineEvent::from_group_identify(item).with_sent_at(sent_at.clone()))
+        .map(|item| {
+            PipelineEvent::from_group_identify(item)
+                .with_sent_at(sent_at.clone())
+                .with_enrichment(enrichment)
+        })
         .collect();
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
@@ -452,13 +481,19 @@ async fn groups(
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn alias(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     payload: PostHogPayload<AliasRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
+    let enrichment = enrichment.properties();
     let events = payload
         .items
         .into_iter()
-        .map(|item| PipelineEvent::from_alias(item).with_sent_at(sent_at.clone()))
+        .map(|item| {
+            PipelineEvent::from_alias(item)
+                .with_sent_at(sent_at.clone())
+                .with_enrichment(enrichment)
+        })
         .collect();
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
@@ -467,13 +502,19 @@ async fn alias(
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn engage(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     payload: PostHogPayload<EngageRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
+    let enrichment = enrichment.properties();
     let events = payload
         .items
         .into_iter()
-        .map(|item| PipelineEvent::from_engage(item).with_sent_at(sent_at.clone()))
+        .map(|item| {
+            PipelineEvent::from_engage(item)
+                .with_sent_at(sent_at.clone())
+                .with_enrichment(enrichment)
+        })
         .collect();
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
@@ -518,6 +559,7 @@ async fn decide(
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn session_recording(
     State(state): State<AppState>,
+    enrichment: RequestEnrichment,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<PostHogResponse>, AppError> {
@@ -542,8 +584,9 @@ async fn session_recording(
         .unwrap_or("session-recording")
         .to_string();
 
-    let event =
-        PipelineEvent::from_session_recording(distinct_id, payload, api_key).with_sent_at(sent_at);
+    let event = PipelineEvent::from_session_recording(distinct_id, payload, api_key)
+        .with_sent_at(sent_at)
+        .with_enrichment(enrichment.properties());
 
     state.pipeline.send(vec![event]).await?;
     Ok(Json(PostHogResponse::success()))

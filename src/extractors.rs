@@ -2,8 +2,8 @@ use std::io::Read;
 
 use axum::async_trait;
 use axum::body::{to_bytes, Body};
-use axum::extract::FromRequest;
-use axum::http::{header, HeaderMap, Request, StatusCode};
+use axum::extract::{FromRequest, FromRequestParts};
+use axum::http::{header, request::Parts, HeaderMap, Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
@@ -27,6 +27,11 @@ use crate::models::{
 };
 use crate::AppState;
 
+#[cfg(target_arch = "wasm32")]
+use worker::Cf;
+
+use std::convert::Infallible;
+
 pub struct PostHogPayload<T> {
     pub items: Vec<T>,
     pub sent_at: Option<DateTime<Utc>>,
@@ -34,6 +39,32 @@ pub struct PostHogPayload<T> {
 
 pub struct PostHogBatchPayload {
     pub batch: BatchRequest,
+}
+
+pub struct RequestEnrichment {
+    properties: Map<String, Value>,
+}
+
+impl RequestEnrichment {
+    pub fn properties(&self) -> &Map<String, Value> {
+        &self.properties
+    }
+}
+
+#[async_trait]
+impl<S> FromRequestParts<S> for RequestEnrichment
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let properties = build_enrichment_properties(parts);
+        Ok(Self { properties })
+    }
 }
 
 trait ApplyApiKey {
@@ -45,6 +76,104 @@ fn apply_api_key<T: ApplyApiKey>(items: &mut [T], api_key: Option<&str>) {
         for item in items {
             item.ensure_api_key(api_key);
         }
+    }
+}
+
+fn build_enrichment_properties(parts: &Parts) -> Map<String, Value> {
+    let headers = &parts.headers;
+    let mut props = Map::new();
+
+    if let Some(ip) = header_value(headers, "cf-connecting-ip") {
+        props.insert("$ip".to_string(), Value::String(ip));
+    }
+
+    if let Some(ray) = header_value(headers, "cf-ray") {
+        props.insert("cf_ray".to_string(), Value::String(ray));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    if let Some(cf) = parts.extensions.get::<Cf>() {
+        insert_cf_properties(&mut props, cf);
+    }
+
+    props
+}
+
+fn header_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn insert_cf_properties(props: &mut Map<String, Value>, cf: &Cf) {
+    if let Some(country) = cf.country() {
+        props.insert("$geoip_country_code".to_string(), Value::String(country));
+    }
+
+    if let Some(city) = cf.city() {
+        props.insert("$geoip_city_name".to_string(), Value::String(city));
+    }
+
+    if let Some(continent) = cf.continent() {
+        props.insert(
+            "$geoip_continent_code".to_string(),
+            Value::String(continent),
+        );
+    }
+
+    if let Some((lat, lon)) = cf.coordinates() {
+        if let Some(lat) = serde_json::Number::from_f64(lat as f64) {
+            props.insert("$geoip_latitude".to_string(), Value::Number(lat));
+        }
+        if let Some(lon) = serde_json::Number::from_f64(lon as f64) {
+            props.insert("$geoip_longitude".to_string(), Value::Number(lon));
+        }
+    }
+
+    if let Some(postal_code) = cf.postal_code() {
+        props.insert("$geoip_postal_code".to_string(), Value::String(postal_code));
+    }
+
+    if let Some(region_code) = cf.region_code() {
+        props.insert(
+            "$geoip_subdivision_1_code".to_string(),
+            Value::String(region_code),
+        );
+    }
+
+    if let Some(region) = cf.region() {
+        props.insert(
+            "$geoip_subdivision_1_name".to_string(),
+            Value::String(region),
+        );
+    }
+
+    let timezone = cf.timezone_name();
+    if !timezone.is_empty() {
+        props.insert("$geoip_time_zone".to_string(), Value::String(timezone));
+    }
+
+    if let Some(asn) = cf.asn() {
+        props.insert(
+            "cf_asn".to_string(),
+            Value::Number(serde_json::Number::from(asn as u64)),
+        );
+    }
+
+    if let Some(org) = cf.as_organization() {
+        props.insert("cf_as_organization".to_string(), Value::String(org));
+    }
+
+    let colo = cf.colo();
+    if !colo.is_empty() {
+        props.insert("cf_colo".to_string(), Value::String(colo));
+    }
+
+    if let Some(metro_code) = cf.metro_code() {
+        props.insert("cf_metro_code".to_string(), Value::String(metro_code));
     }
 }
 

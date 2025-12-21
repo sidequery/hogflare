@@ -3,7 +3,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use http::StatusCode;
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use thiserror::Error;
 use tracing::{info, instrument};
 use url::Url;
@@ -282,6 +282,28 @@ impl PipelineEvent {
                 .entry("$sent_at".to_string())
                 .or_insert(Value::String(sent_at.to_rfc3339()));
         }
+        self
+    }
+
+    pub fn with_enrichment(mut self, enrichment: &Map<String, Value>) -> Self {
+        if enrichment.is_empty() {
+            return self;
+        }
+
+        let merged = match self.properties.take() {
+            Some(Value::Object(mut props)) => {
+                for (key, value) in enrichment {
+                    if !props.contains_key(key) {
+                        props.insert(key.clone(), value.clone());
+                    }
+                }
+                Value::Object(props)
+            }
+            Some(Value::Null) | None => Value::Object(enrichment.clone()),
+            Some(other) => other,
+        };
+
+        self.properties = Some(merged);
         self
     }
 
