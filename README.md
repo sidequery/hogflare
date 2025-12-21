@@ -4,6 +4,12 @@
 
 An Axum-based PostHog compatible ingestion layer that forwards events to a Cloudflare Pipeline HTTP stream. The service supports the `/capture` and `/identify` endpoints so existing PostHog SDKs can drop-in with minimal configuration changes.
 
+## Why?
+
+Posthog is a nice to use web & product analytics platform. However, self hosting Posthog is prohibitively complex so most users seem to rely on the cloud offering. This is an alternative for cost-conscious data folks & businesses interested in a low maintainence way to ingest web & product analytics directly into a managed data lake.
+
+A [hobby deployment of Posthog](https://github.com/PostHog/posthog/blob/master/docker-compose.hobby.yml) includes: postgres, redis, redis7, clickhouse, zookeeper, kafka, worker, web, plugins, proxy, objectstorage, seaweedfs, asyncmigrationscheck, temporal, elasticsearch, temporal-admin-tools, temporal-ui, temporal-django-worker, cyclotron-janitor, capture, replay-capture, property-defs-rs, livestream, feature-flags, cymbal
+
 ## Getting started
 
 ### Prerequisites
