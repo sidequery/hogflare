@@ -62,7 +62,7 @@ async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error:
 
     let test_result = async {
         let (address, server_handle) =
-            spawn_app_with_options(pipeline_base.clone(), None, None, None).await?;
+            spawn_app_with_options(pipeline_base.clone(), None, None, None, None).await?;
 
         let capture_result = async {
             let status = Command::new("bun")

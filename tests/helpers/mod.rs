@@ -53,7 +53,7 @@ pub async fn spawn_pipeline_stub(
 pub async fn spawn_app(
     pipeline_endpoint: Url,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
-    spawn_app_with_options(pipeline_endpoint, None, None, None).await
+    spawn_app_with_options(pipeline_endpoint, None, None, None, None).await
 }
 
 pub async fn spawn_app_with_options(
@@ -61,6 +61,7 @@ pub async fn spawn_app_with_options(
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
+    feature_flags: Option<hogflare::feature_flags::FeatureFlagStore>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
     let pipeline_client = PipelineClient::new(pipeline_endpoint, None, Duration::from_secs(5))?;
 
@@ -80,6 +81,7 @@ pub async fn spawn_app_with_options(
                 session_recording_endpoint,
                 signing_secret,
                 None,
+                Arc::new(feature_flags.unwrap_or_else(hogflare::feature_flags::FeatureFlagStore::empty)),
             )
             .await
             {

@@ -1,5 +1,6 @@
 pub mod config;
 pub mod extractors;
+pub mod feature_flags;
 pub mod groups;
 pub mod models;
 pub mod pipeline;
@@ -24,9 +25,10 @@ use extractors::{
     header_api_key, header_sent_at, verify_signature, PostHogBatchPayload, PostHogPayload,
     RequestEnrichment,
 };
+use feature_flags::{FeatureFlagContext, FeatureFlagStore};
 use models::{
-    AliasRequest, BatchRequest, CaptureRequest, DecideResponse, EngageRequest, ErrorResponse,
-    GroupIdentifyRequest, IdentifyRequest, PostHogResponse,
+    AliasRequest, BatchRequest, CaptureRequest, DecideResponse, DecideSessionRecording,
+    EngageRequest, ErrorResponse, GroupIdentifyRequest, IdentifyRequest, PostHogResponse,
 };
 use pipeline::{PipelineClient, PipelineError, PipelineEvent};
 use groups::{GroupError, GroupStore, GroupTypeMap, NoopGroupStore};
@@ -34,12 +36,13 @@ use persons::{
     alias_from_request, update_from_capture, update_from_engage, update_from_identify,
     NoopPersonStore, PersonAlias, PersonError, PersonStore, PersonUpdate,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 use tracing::{error, warn};
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
+use chrono::Utc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::net::TcpListener;
@@ -61,6 +64,7 @@ pub(crate) struct AppState {
     pub(crate) person_debug_token: Option<String>,
     pub(crate) group_store: Arc<dyn GroupStore>,
     pub(crate) group_type_map: GroupTypeMap,
+    pub(crate) feature_flags: Arc<FeatureFlagStore>,
 }
 
 #[derive(Debug, Error)]
@@ -172,6 +176,7 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
         config.session_recording_endpoint.clone(),
         config.posthog_signing_secret.clone(),
         config.person_debug_token.clone(),
+        Arc::new(config.feature_flags),
     )
     .await
 }
@@ -214,6 +219,7 @@ pub async fn fetch(
         persons::store_from_env(&env, config.posthog_team_id);
     let group_store: Arc<dyn GroupStore> = groups::store_from_env(&env);
     let group_type_map = GroupTypeMap::new(config.posthog_group_types.clone());
+    let feature_flags = Arc::new(config.feature_flags);
 
     let mut router = build_router_with_options(
         Arc::new(pipeline),
@@ -224,6 +230,7 @@ pub async fn fetch(
         config.session_recording_endpoint.clone(),
         config.posthog_signing_secret.clone(),
         config.person_debug_token.clone(),
+        feature_flags,
         person_store,
     );
 
@@ -240,6 +247,7 @@ pub fn build_router(pipeline: Arc<PipelineClient>) -> Router {
         None,
         None,
         None,
+        Arc::new(FeatureFlagStore::empty()),
         Arc::new(NoopPersonStore),
     )
 }
@@ -253,6 +261,7 @@ pub fn build_router_with_options(
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
     person_debug_token: Option<String>,
+    feature_flags: Arc<FeatureFlagStore>,
     person_store: Arc<dyn PersonStore>,
 ) -> Router {
     router(build_state(
@@ -264,6 +273,7 @@ pub fn build_router_with_options(
         session_recording_endpoint,
         signing_secret,
         person_debug_token,
+        feature_flags,
         person_store,
     ))
 }
@@ -281,7 +291,8 @@ pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Resu
             None,
             None,
             None,
-            Arc::new(NoopPersonStore),
+            Arc::new(FeatureFlagStore::empty()),
+            Arc::new(persons::MemoryPersonStore::new(None)),
         ),
     )
     .await
@@ -298,6 +309,7 @@ pub async fn serve_with_options(
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
     person_debug_token: Option<String>,
+    feature_flags: Arc<FeatureFlagStore>,
 ) -> Result<(), RunError> {
     let state = build_state(
         pipeline,
@@ -308,7 +320,8 @@ pub async fn serve_with_options(
         session_recording_endpoint,
         signing_secret,
         person_debug_token,
-        Arc::new(NoopPersonStore),
+        feature_flags,
+        Arc::new(persons::MemoryPersonStore::new(posthog_team_id)),
     );
     serve_with_state(listener, state).await
 }
@@ -325,8 +338,8 @@ fn router(state: AppState) -> Router {
         .route("/alias", post(alias))
         .route("/engage", post(engage))
         .route("/decide", post(decide))
-        .route("/flags", post(decide))
-        .route("/flags/", post(decide))
+        .route("/flags", post(flags))
+        .route("/flags/", post(flags))
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
         .route("/__debug/person/:id", get(debug_person))
@@ -352,6 +365,7 @@ fn build_state(
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
     person_debug_token: Option<String>,
+    feature_flags: Arc<FeatureFlagStore>,
     person_store: Arc<dyn PersonStore>,
 ) -> AppState {
     AppState {
@@ -364,6 +378,7 @@ fn build_state(
         signing_secret,
         person_store,
         person_debug_token,
+        feature_flags,
     }
 }
 
@@ -676,6 +691,14 @@ async fn identify(
         if let Some(anon) = item
             .anon_distinct_id
             .clone()
+            .or_else(|| {
+                item.properties
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .and_then(|props| props.get("$anon_distinct_id"))
+                    .and_then(Value::as_str)
+                    .map(|value| value.to_string())
+            })
             .or_else(|| {
                 item.extra
                     .get("$anon_distinct_id")
@@ -1003,14 +1026,37 @@ struct DecideRequest {
     api_key: Option<String>,
     #[serde(default)]
     token: Option<String>,
+    #[serde(default)]
+    distinct_id: Option<String>,
+    #[serde(default)]
+    groups: Option<std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    person_properties: Option<std::collections::HashMap<String, Value>>,
+    #[serde(default, rename = "group_properties")]
+    group_properties: Option<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
+    #[serde(default)]
+    disable_flags: Option<bool>,
+    #[serde(default)]
+    flag_keys_to_evaluate: Option<Vec<String>>,
+    #[serde(default)]
+    evaluation_environments: Option<Vec<String>>,
+}
+
+#[derive(Default, Deserialize)]
+struct FlagsQuery {
+    #[serde(default)]
+    v: Option<u8>,
+    #[serde(default)]
+    config: Option<bool>,
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn decide(
     State(state): State<AppState>,
     headers: HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<FlagsQuery>,
     Json(payload): Json<DecideRequest>,
-) -> impl IntoResponse {
+) -> Result<Json<DecideResponse>, AppError> {
     let header_key = headers
         .get("x-posthog-api-key")
         .and_then(|value| value.to_str().ok())
@@ -1018,19 +1064,86 @@ async fn decide(
 
     let api_key = payload
         .api_key
-        .or(payload.token)
+        .clone()
+        .or(payload.token.clone())
         .or(header_key)
         .or(state.decide_api_token.clone());
 
+    let version = query.v.unwrap_or(2);
+    let flags = evaluate_feature_flags(&state, &payload).await?;
+    let (feature_flags, feature_flag_payloads) = flags.to_maps(version);
+
     let mut response = DecideResponse::default();
     response.config.api_token = api_key;
+    response.feature_flags = feature_flags;
+    response.feature_flag_payloads = feature_flag_payloads;
 
     if let Some(endpoint) = state.session_recording_endpoint.clone() {
         response.session_recording.endpoint = Some(endpoint);
         response.session_recording.proxy = true;
     }
 
-    Json(response)
+    Ok(Json(response))
+}
+
+#[derive(Serialize)]
+struct FlagsResponse {
+    #[serde(rename = "featureFlags")]
+    feature_flags: std::collections::HashMap<String, Value>,
+    #[serde(rename = "featureFlagPayloads")]
+    feature_flag_payloads: std::collections::HashMap<String, Value>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    flags: std::collections::HashMap<String, Value>,
+    #[serde(rename = "errorsWhileComputingFlags")]
+    errors_while_computing_flags: bool,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    #[serde(rename = "evaluatedAt")]
+    evaluated_at: i64,
+    #[serde(rename = "sessionRecording", skip_serializing_if = "Option::is_none")]
+    session_recording: Option<DecideSessionRecording>,
+    #[serde(rename = "supportedCompression", skip_serializing_if = "Vec::is_empty")]
+    supported_compression: Vec<String>,
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn flags(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<FlagsQuery>,
+    Json(payload): Json<DecideRequest>,
+) -> Result<impl IntoResponse, AppError> {
+    let version = query.v.unwrap_or(2);
+    let flags = evaluate_feature_flags(&state, &payload).await?;
+    let (feature_flags, feature_flag_payloads) = flags.to_maps(version);
+    let flag_details = flags.to_flag_details(version);
+    let include_config = query.config.unwrap_or(false);
+    let mut session_recording = None;
+    let mut supported_compression = Vec::new();
+    let request_id = flags.request_id();
+    let evaluated_at = Utc::now().timestamp_millis();
+
+    if include_config {
+        let mut recording = DecideSessionRecording::default();
+        recording.proxy = true;
+        if let Some(endpoint) = state.session_recording_endpoint.clone() {
+            recording.endpoint = Some(endpoint);
+        }
+        session_recording = Some(recording);
+
+        supported_compression = vec!["gzip".to_string(), "gzip-js".to_string()];
+    }
+
+    Ok(Json(FlagsResponse {
+        feature_flags,
+        feature_flag_payloads,
+        flags: flag_details,
+        errors_while_computing_flags: false,
+        request_id,
+        evaluated_at,
+        session_recording,
+        supported_compression,
+    })
+    .into_response())
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
@@ -1166,6 +1279,69 @@ async fn ensure_person_snapshot(
     distinct_id: &str,
 ) -> Result<persons::PersonSnapshot, AppError> {
     Ok(state.person_store.ensure_person(distinct_id).await?)
+}
+
+async fn evaluate_feature_flags(
+    state: &AppState,
+    payload: &DecideRequest,
+) -> Result<feature_flags::FeatureFlagEvaluation, AppError> {
+    if payload.disable_flags.unwrap_or(false) || state.feature_flags.is_empty() {
+        return Ok(feature_flags::FeatureFlagEvaluation::empty());
+    }
+
+    let Some(distinct_id) = payload.distinct_id.clone() else {
+        return Ok(feature_flags::FeatureFlagEvaluation::empty());
+    };
+
+    let snapshot = state.person_store.get_snapshot(&distinct_id).await?;
+    let mut person_properties = serde_json::Map::new();
+    if let Some(record) = snapshot.record {
+        if let Value::Object(props) = record.merged_properties() {
+            person_properties = props;
+        }
+    }
+
+    if let Some(overrides) = payload.person_properties.as_ref() {
+        for (key, value) in overrides {
+            person_properties.insert(key.clone(), value.clone());
+        }
+    }
+
+    let groups = payload.groups.clone().unwrap_or_default();
+    let mut group_properties: std::collections::HashMap<String, serde_json::Map<String, Value>> =
+        std::collections::HashMap::new();
+
+    for (group_type, group_key) in &groups {
+        let snapshot = state.group_store.get_snapshot(group_type, group_key).await?;
+        if let Some(record) = snapshot.record {
+            group_properties.insert(group_type.clone(), record.properties);
+        }
+    }
+
+    if let Some(overrides) = payload.group_properties.as_ref() {
+        for (group_type, props) in overrides {
+            let converted: serde_json::Map<String, Value> =
+                props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            group_properties.insert(group_type.clone(), converted);
+        }
+    }
+
+    let ctx = FeatureFlagContext {
+        distinct_id,
+        person_properties,
+        groups,
+        group_properties,
+    };
+
+    let mut options = feature_flags::FeatureFlagEvaluationOptions::default();
+    if let Some(keys) = payload.flag_keys_to_evaluate.as_ref() {
+        options.flag_keys = Some(keys.iter().cloned().collect());
+    }
+    if let Some(envs) = payload.evaluation_environments.as_ref() {
+        options.evaluation_environments = Some(envs.iter().cloned().collect());
+    }
+
+    Ok(state.feature_flags.evaluate_with(&ctx, &options))
 }
 
 fn person_fields(

@@ -6,6 +6,8 @@ use std::env::{self, VarError};
 use url::Url;
 use thiserror::Error;
 
+use crate::feature_flags::FeatureFlagStore;
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub address: SocketAddr,
@@ -18,6 +20,7 @@ pub struct Config {
     pub session_recording_endpoint: Option<String>,
     pub posthog_signing_secret: Option<String>,
     pub person_debug_token: Option<String>,
+    pub feature_flags: FeatureFlagStore,
 }
 
 #[derive(Debug, Error)]
@@ -32,6 +35,8 @@ pub enum ConfigError {
     InvalidTimeout { value: String, message: String },
     #[error("failed to parse POSTHOG_TEAM_ID `{value}`: {message}")]
     InvalidTeamId { value: String, message: String },
+    #[error("failed to parse HOGFLARE_FEATURE_FLAGS: {0}")]
+    InvalidFeatureFlags(String),
 }
 
 impl Config {
@@ -111,6 +116,11 @@ impl Config {
             .map(|secret| secret.to_string())
             .or_else(|| env.var("POSTHOG_SIGNING_SECRET").ok().map(|v| v.to_string()));
         let person_debug_token = env.var("PERSON_DEBUG_TOKEN").ok().map(|v| v.to_string());
+        let feature_flags = match env.var("HOGFLARE_FEATURE_FLAGS") {
+            Ok(value) => FeatureFlagStore::from_json(&value)
+                .map_err(|err| ConfigError::InvalidFeatureFlags(err.to_string()))?,
+            Err(_) => FeatureFlagStore::empty(),
+        };
 
         Ok(Self {
             address,
@@ -123,6 +133,7 @@ impl Config {
             session_recording_endpoint,
             posthog_signing_secret,
             person_debug_token,
+            feature_flags,
         })
     }
 
@@ -197,6 +208,16 @@ impl Config {
         let session_recording_endpoint = env::var("POSTHOG_SESSION_RECORDING_ENDPOINT").ok();
         let posthog_signing_secret = env::var("POSTHOG_SIGNING_SECRET").ok();
         let person_debug_token = env::var("PERSON_DEBUG_TOKEN").ok();
+        let feature_flags = match env::var("HOGFLARE_FEATURE_FLAGS") {
+            Ok(value) => FeatureFlagStore::from_json(&value)
+                .map_err(|err| ConfigError::InvalidFeatureFlags(err.to_string()))?,
+            Err(VarError::NotPresent) => FeatureFlagStore::empty(),
+            Err(VarError::NotUnicode(_)) => {
+                return Err(ConfigError::InvalidFeatureFlags(
+                    "value contains invalid unicode".to_string(),
+                ))
+            }
+        };
 
         Ok(Self {
             address,
@@ -209,6 +230,7 @@ impl Config {
             session_recording_endpoint,
             posthog_signing_secret,
             person_debug_token,
+            feature_flags,
         })
     }
 }

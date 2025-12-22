@@ -798,6 +798,7 @@ mod tests {
             person_debug_token: None,
             group_store: Arc::new(crate::groups::NoopGroupStore),
             group_type_map: crate::groups::GroupTypeMap::default(),
+            feature_flags: Arc::new(crate::feature_flags::FeatureFlagStore::empty()),
         }
     }
 

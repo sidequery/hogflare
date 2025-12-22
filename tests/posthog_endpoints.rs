@@ -19,6 +19,7 @@ async fn capture_requires_signature_when_secret_configured(
         None,
         None,
         Some(signing_secret.to_string()),
+        None,
     )
     .await?;
 
@@ -69,6 +70,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
         pipeline_endpoint,
         Some("phc_project_default".to_string()),
         Some("https://session.example.com".to_string()),
+        None,
         None,
     )
     .await?;

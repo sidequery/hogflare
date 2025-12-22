@@ -1,5 +1,14 @@
 use std::collections::HashSet;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::atomic::{AtomicI64, Ordering};
+
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::sync::RwLock;
+
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -206,6 +215,148 @@ impl PersonStore for NoopPersonStore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub struct MemoryPersonStore {
+    records: RwLock<HashMap<String, PersonRecord>>,
+    redirects: RwLock<HashMap<String, String>>,
+    next_id: AtomicI64,
+    team_id: Option<i64>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl MemoryPersonStore {
+    pub fn new(team_id: Option<i64>) -> Self {
+        Self {
+            records: RwLock::new(HashMap::new()),
+            redirects: RwLock::new(HashMap::new()),
+            next_id: AtomicI64::new(1),
+            team_id,
+        }
+    }
+
+    async fn resolve_id(&self, distinct_id: &str) -> String {
+        let redirects = self.redirects.read().await;
+        let mut current = distinct_id.to_string();
+        let mut hops = 0;
+        while let Some(next) = redirects.get(&current) {
+            current = next.clone();
+            hops += 1;
+            if hops > 10 {
+                break;
+            }
+        }
+        current
+    }
+
+    fn allocate_id(&self) -> i64 {
+        self.next_id.fetch_add(1, Ordering::SeqCst)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl PersonStore for MemoryPersonStore {
+    async fn apply_update(&self, update: PersonUpdate) -> Result<PersonSnapshot, PersonError> {
+        let canonical = self.resolve_id(&update.distinct_id).await;
+        let mut records = self.records.write().await;
+        let record = records
+            .entry(canonical.clone())
+            .or_insert_with(|| PersonRecord::new(canonical.clone(), self.team_id, 0));
+        if record.id == 0 {
+            record.id = self.allocate_id();
+        }
+        record.apply_update(&update);
+
+        if canonical != update.distinct_id {
+            let mut redirects = self.redirects.write().await;
+            redirects.insert(update.distinct_id.clone(), canonical.clone());
+        }
+
+        Ok(PersonSnapshot {
+            canonical_id: canonical,
+            record: Some(record.clone()),
+        })
+    }
+
+    async fn apply_alias(&self, alias: PersonAlias) -> Result<PersonSnapshot, PersonError> {
+        let primary_id = self.resolve_id(&alias.distinct_id).await;
+        let secondary_id = self.resolve_id(&alias.alias).await;
+
+        if primary_id == secondary_id {
+            let records = self.records.read().await;
+            return Ok(PersonSnapshot {
+                canonical_id: primary_id.clone(),
+                record: records.get(&primary_id).cloned(),
+            });
+        }
+
+        let mut records = self.records.write().await;
+        let mut primary_record = records
+            .get(&primary_id)
+            .cloned()
+            .unwrap_or_else(|| PersonRecord::new(primary_id.clone(), self.team_id, 0));
+        if primary_record.id == 0 {
+            primary_record.id = self.allocate_id();
+        }
+        primary_record.ensure_distinct_id(&alias.distinct_id);
+
+        let mut secondary_record = records
+            .get(&secondary_id)
+            .cloned()
+            .unwrap_or_else(|| PersonRecord::new(secondary_id.clone(), self.team_id, 0));
+        if secondary_record.id == 0 {
+            secondary_record.id = self.allocate_id();
+        }
+        secondary_record.ensure_distinct_id(&alias.alias);
+
+        let merged = PersonRecord::merge(&primary_record, &secondary_record);
+        records.insert(primary_id.clone(), merged.clone());
+
+        let mut redirects = self.redirects.write().await;
+        redirects.insert(secondary_id.clone(), primary_id.clone());
+        redirects.insert(alias.alias.clone(), primary_id.clone());
+        for id in &merged.distinct_ids {
+            redirects.insert(id.clone(), primary_id.clone());
+        }
+
+        Ok(PersonSnapshot {
+            canonical_id: primary_id,
+            record: Some(merged),
+        })
+    }
+
+    async fn ensure_person(&self, distinct_id: &str) -> Result<PersonSnapshot, PersonError> {
+        let canonical = self.resolve_id(distinct_id).await;
+        let mut records = self.records.write().await;
+        let record = records
+            .entry(canonical.clone())
+            .or_insert_with(|| PersonRecord::new(canonical.clone(), self.team_id, 0));
+        if record.id == 0 {
+            record.id = self.allocate_id();
+        }
+        record.ensure_distinct_id(distinct_id);
+
+        if canonical != distinct_id {
+            let mut redirects = self.redirects.write().await;
+            redirects.insert(distinct_id.to_string(), canonical.clone());
+        }
+
+        Ok(PersonSnapshot {
+            canonical_id: canonical,
+            record: Some(record.clone()),
+        })
+    }
+
+    async fn get_snapshot(&self, distinct_id: &str) -> Result<PersonSnapshot, PersonError> {
+        let canonical = self.resolve_id(distinct_id).await;
+        let records = self.records.read().await;
+        Ok(PersonSnapshot {
+            canonical_id: canonical.clone(),
+            record: records.get(&canonical).cloned(),
+        })
+    }
+}
+
 pub fn update_from_capture(request: &CaptureRequest) -> Option<PersonUpdate> {
     let properties = request.properties.as_ref()?;
     let props = properties.as_object()?;
@@ -228,8 +379,10 @@ pub fn update_from_capture(request: &CaptureRequest) -> Option<PersonUpdate> {
 }
 
 pub fn update_from_identify(request: &IdentifyRequest) -> Option<PersonUpdate> {
-    let set = extract_object(request.properties.as_ref());
-    let set_once = extract_object(request.extra.get("$set_once"));
+    let properties = request.properties.as_ref()?;
+    let props = properties.as_object()?;
+    let set = extract_object(props.get("$set"));
+    let set_once = extract_object(props.get("$set_once"));
 
     let update = PersonUpdate {
         distinct_id: request.distinct_id.clone(),

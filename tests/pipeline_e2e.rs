@@ -20,6 +20,7 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
             Some("phc_default".to_string()),
             Some("https://session.example.com".to_string()),
             None,
+            None,
         )
         .await?;
 

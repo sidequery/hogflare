@@ -285,7 +285,84 @@ Person DO state is not written to R2. Only event-level snapshots are stored in t
 
 ### Feature flags
 
-- `/decide` returns placeholders, not evaluated flags.
+Feature flags are evaluated in the Worker and exposed via `/decide` and `/flags`.
+
+Configuration is a JSON blob in `HOGFLARE_FEATURE_FLAGS`. It can be either:
+
+- `{ "flags": [ ... ] }`
+- `[ ... ]` (array of flag definitions)
+
+Supported fields per flag:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `key` | string | Flag key |
+| `active` | bool | Defaults to `true` |
+| `type` | `"boolean"` \| `"multivariate"` | Defaults to boolean |
+| `rollout_percentage` | number | 0–100 |
+| `variants` | array | `[{ key, rollout_percentage, payload? }]` |
+| `payload` | json | Used for boolean flags |
+| `variant_payloads` | map | `{ "variant_key": { ... } }` |
+| `conditions` | array | See filters below |
+| `group_type` | string | Enables group-based rollout |
+| `evaluation_environments` | array | Optional env gating |
+| `salt` | string | Optional bucketing salt |
+| `id`, `version`, `description` | metadata | Returned in flag details |
+
+Filters support these operators:
+
+- `eq` (default), `is_not`
+- `in`, `not_in`
+- `contains`
+- `regex`
+- `is_set`
+- `gt`, `gte`, `lt`, `lte`
+
+Value comparisons coerce strings/booleans/numbers when possible (e.g. `"21"` >= `18`).
+
+Request fields honored by `/flags` and `/decide`:
+
+- `flag_keys_to_evaluate` — only evaluate these keys
+- `evaluation_environments` — only evaluate flags whose `evaluation_environments` includes one of these
+- `person_properties`, `group_properties`, `groups` — override state for evaluation
+
+#### Bucketing
+
+Rollout bucketing is stable and deterministic:
+
+- Hash: `sha1("{salt}:{hash_id}")`
+- `hash_id` is `distinct_id` for person flags, or the group key when `group_type` is set
+- Bucket = `hash % 100` (0–99)
+- `salt` defaults to the flag `key` if not provided
+
+Example:
+
+```json
+{
+  "flags": [
+    {
+      "key": "pro-flag",
+      "active": true,
+      "rollout_percentage": 100,
+      "id": 12,
+      "version": 3,
+      "description": "Pro users",
+      "salt": "pro-flag-salt",
+      "conditions": [
+        {
+          "properties": [
+            { "key": "plan", "value": ["pro", "enterprise"], "operator": "in" },
+            { "key": "age", "value": 18, "operator": "gte" }
+          ]
+        }
+      ],
+      "payload": { "tier": "pro" }
+    }
+  ]
+}
+```
+
+Limitations: cohorts and event-based filters are not supported.
 
 ### Signing
 

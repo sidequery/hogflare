@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-axum = { version = "0.7", default-features = false, features = ["json"] }
+axum = { version = "0.7", default-features = false, features = ["json", "query"] }
 http = "1.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -29,9 +29,10 @@ worker = { version = "0.7", features = ["http"] }
 tower-service = "0.3.3"
 uuid = { version = "1.7", features = ["v4", "serde"] }
 getrandom = { version = "0.2", features = ["js"] }
+regex = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-axum = { version = "0.7", default-features = false, features = ["json", "tokio", "http1"] }
+axum = { version = "0.7", default-features = false, features = ["json", "query", "tokio", "http1"] }
 dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "process", "net", "time"] }
