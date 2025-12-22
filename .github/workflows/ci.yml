@@ -26,8 +26,17 @@ jobs:
       - name: Install wasm target
         run: rustup target add wasm32-unknown-unknown
 
+      - name: Cache worker-build
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/worker-build
+          key: ${{ runner.os }}-worker-build-0.7
+
       - name: Install worker-build
-        run: cargo install worker-build@^0.7
+        run: |
+          if ! command -v worker-build >/dev/null; then
+            cargo install worker-build@^0.7
+          fi
 
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
