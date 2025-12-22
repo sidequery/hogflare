@@ -14,26 +14,31 @@ Hogflare is a Cloudflare Workers ingestion layer for PostHog SDKs. It supports P
 ## Architecture
 
 ```
-PostHog SDKs
-   |
-   v
-Cloudflare Worker (Hogflare)
-   | \
-   |  \__ Durable Object (persons)
-   |       - merges $set / $set_once / $unset
-   |       - applies aliasing
-   |
-   |  \__ Durable Object (person id counter)
-   |       - allocates sequential person ids
-   |
-   |  \__ Durable Object (groups)
-   |       - stores group properties
-   |
-   v
-Cloudflare Pipelines (HTTP stream)
-   |
-   v
-R2 (Iceberg / Parquet)
+                +----------------------+
+                |     PostHog SDKs     |
+                +----------------------+
+                   |              ^
+                   | ingest       | flags + decide
+                   v              |
+                +----------------------+
+                |  Worker (Hogflare)   |
+                +----------------------+
+                   |          |
+                   |          |
+                   v          v
+        +----------------+  +----------------+
+        |  Persons DO    |  |  Groups DO     |
+        +----------------+  +----------------+
+                   |
+                   v
+        +------------------------+
+        | Cloudflare Pipelines   |
+        +------------------------+
+                   |
+                   v
+        +------------------------+
+        | R2 (Iceberg/Parquet)   |
+        +------------------------+
 ```
 
 Notes:
