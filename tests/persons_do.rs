@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::process::{Child, Command};
@@ -31,6 +32,7 @@ async fn durable_object_person_updates_apply() -> Result<(), Box<dyn std::error:
         &pipeline_endpoint.to_string(),
         debug_token,
     )?;
+    patch_worker_bundle()?;
 
     let mut wrangler = spawn_wrangler_dev(&config_path, port)?;
     wait_for_health(port).await?;
@@ -43,8 +45,10 @@ async fn durable_object_person_updates_apply() -> Result<(), Box<dyn std::error:
         .post(format!("{base_url}/identify"))
         .json(&json!({
             "distinct_id": "person-1",
-            "properties": { "email": "person1@example.com" },
-            "$set_once": { "created_at": "2024-01-01" }
+            "properties": {
+                "$set": { "email": "person1@example.com" },
+                "$set_once": { "created_at": "2024-01-01" }
+            }
         }))
         .send()
         .await?
@@ -78,8 +82,8 @@ async fn durable_object_person_updates_apply() -> Result<(), Box<dyn std::error:
     client
         .post(format!("{base_url}/alias"))
         .json(&json!({
-            "distinct_id": "anon-1",
-            "alias": "person-1"
+            "distinct_id": "person-1",
+            "alias": "anon-1"
         }))
         .send()
         .await?
@@ -105,7 +109,7 @@ fn write_wrangler_config(
     pipeline_endpoint: &str,
     debug_token: &str,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let main_path = std::env::current_dir()?.join("build/index.js");
+    let main_path = std::env::current_dir()?.join("build/worker.mjs");
     let config = format!(
         r#"
 name = "hogflare-test"
@@ -117,13 +121,20 @@ CLOUDFLARE_PIPELINE_ENDPOINT = "{pipeline}"
 CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "5"
 PERSON_DEBUG_TOKEN = "{debug_token}"
 
+[build.upload]
+format = "modules"
+
 [[durable_objects.bindings]]
 name = "PERSONS"
 class_name = "PersonDurableObject"
 
+[[durable_objects.bindings]]
+name = "PERSON_ID_COUNTER"
+class_name = "PersonIdCounterDurableObject"
+
 [[migrations]]
 tag = "v1"
-new_classes = ["PersonDurableObject"]
+new_classes = ["PersonDurableObject", "PersonIdCounterDurableObject"]
 "#,
         main = main_path.display(),
         pipeline = pipeline_endpoint,
@@ -135,12 +146,38 @@ new_classes = ["PersonDurableObject"]
     Ok(path)
 }
 
+fn patch_worker_bundle() -> Result<(), Box<dyn std::error::Error>> {
+    let build_dir = std::env::current_dir()?.join("build");
+    let bundle_path = build_dir.join("index.js");
+    if !bundle_path.exists() {
+        return Err("missing build/index.js; run worker-build before tests".into());
+    }
+    let contents = fs::read_to_string(&bundle_path)?;
+    let patched = if contents.starts_with("import source wasmModule") {
+        contents.replacen(
+            "import source wasmModule from",
+            "import wasmModule from",
+            1,
+        )
+    } else {
+        contents
+    };
+
+    fs::write(&bundle_path, &patched)?;
+    fs::write(build_dir.join("index.mjs"), &patched)?;
+
+    let worker_shim = r#"export { default } from "./index.mjs";
+export * from "./index.mjs";
+"#;
+    fs::write(build_dir.join("worker.mjs"), worker_shim)?;
+    Ok(())
+}
+
 fn spawn_wrangler_dev(config_path: &PathBuf, port: u16) -> Result<Child, Box<dyn std::error::Error>> {
     let child = Command::new("bunx")
         .arg("wrangler")
         .arg("dev")
         .arg("--local")
-        .arg("--no-bundle")
         .arg("--config")
         .arg(config_path)
         .arg("--ip")
@@ -150,6 +187,8 @@ fn spawn_wrangler_dev(config_path: &PathBuf, port: u16) -> Result<Child, Box<dyn
         .arg("--log-level")
         .arg("error")
         .env("WRANGLER_SEND_METRICS", "false")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()?;
 
     Ok(child)

@@ -381,8 +381,20 @@ pub fn update_from_capture(request: &CaptureRequest) -> Option<PersonUpdate> {
 pub fn update_from_identify(request: &IdentifyRequest) -> Option<PersonUpdate> {
     let properties = request.properties.as_ref()?;
     let props = properties.as_object()?;
-    let set = extract_object(props.get("$set"));
-    let set_once = extract_object(props.get("$set_once"));
+    let (set, mut set_once) = if props.contains_key("$set") || props.contains_key("$set_once")
+    {
+        (
+            extract_object(props.get("$set")),
+            extract_object(props.get("$set_once")),
+        )
+    } else {
+        (props.clone(), Map::new())
+    };
+
+    let extra_set_once = extract_object(request.extra.get("$set_once"));
+    if !extra_set_once.is_empty() {
+        set_once.extend(extra_set_once);
+    }
 
     let update = PersonUpdate {
         distinct_id: request.distinct_id.clone(),
