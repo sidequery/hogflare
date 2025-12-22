@@ -364,13 +364,18 @@ async fn browser_capture(
 
     // Handle $identify events specially - use top-level $set as person_properties
     let event = if payload.event == "$identify" {
+        let mut extra = std::collections::HashMap::new();
+        if let Some(set_once) = payload.set_once.clone() {
+            extra.insert("$set_once".to_string(), set_once);
+        }
+
         let identify_req = IdentifyRequest {
             api_key,
             distinct_id,
             properties: payload.set.clone(),
             timestamp: payload.timestamp,
             context: None,
-            extra: std::collections::HashMap::new(),
+            extra,
         };
         PipelineEvent::from_identify(identify_req)
     } else if payload.event == "$groupidentify" {

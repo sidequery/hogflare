@@ -26,6 +26,7 @@ use crate::models::{
 pub struct PipelineClient {
     endpoint: Url,
     auth_token: Option<String>,
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
     timeout: Duration,
     #[cfg(not(target_arch = "wasm32"))]
     client: Client,

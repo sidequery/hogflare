@@ -26,6 +26,9 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Install JS test dependencies
+        run: bun install --cwd tests/js_client
+
       - name: Verify Docker Compose
         run: docker compose version
 
