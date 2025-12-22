@@ -13,8 +13,14 @@ PostHog SDKs
 Cloudflare Worker (Hogflare)
    | \
    |  \__ Durable Object (persons)
-   |       - merges $set / $set_once
+   |       - merges $set / $set_once / $unset
    |       - applies aliasing
+   |
+   |  \__ Durable Object (person id counter)
+   |       - allocates sequential person ids
+   |
+   |  \__ Durable Object (groups)
+   |       - stores group properties
    |
    v
 Cloudflare Pipelines (HTTP stream)
@@ -25,7 +31,7 @@ R2 (Iceberg / Parquet)
 
 Notes:
 - Events are always forwarded to the pipeline.
-- Person updates are applied statefully in a Durable Object keyed by distinct_id.
+- Person and group updates are applied statefully in Durable Objects keyed by distinct_id or group key.
 
 ## Why?
 
@@ -48,13 +54,24 @@ Admittedly, PostHog does a *lot* more than this package, but some folks really j
 ```json
 {
   "fields": [
+    { "name": "uuid", "type": "string", "required": true },
+    { "name": "team_id", "type": "int64", "required": false },
     { "name": "source", "type": "string", "required": true },
-    { "name": "event_type", "type": "string", "required": true },
+    { "name": "event", "type": "string", "required": true },
     { "name": "distinct_id", "type": "string", "required": true },
     { "name": "timestamp", "type": "timestamp", "required": false },
+    { "name": "created_at", "type": "timestamp", "required": true },
     { "name": "properties", "type": "json", "required": false },
     { "name": "context", "type": "json", "required": false },
+    { "name": "person_id", "type": "string", "required": false },
+    { "name": "person_created_at", "type": "timestamp", "required": false },
     { "name": "person_properties", "type": "json", "required": false },
+    { "name": "group0", "type": "string", "required": false },
+    { "name": "group1", "type": "string", "required": false },
+    { "name": "group2", "type": "string", "required": false },
+    { "name": "group3", "type": "string", "required": false },
+    { "name": "group4", "type": "string", "required": false },
+    { "name": "group_properties", "type": "json", "required": false },
     { "name": "api_key", "type": "string", "required": false },
     { "name": "extra", "type": "json", "required": false }
   ]
@@ -78,13 +95,33 @@ compatibility_date = "2025-01-09"
 CLOUDFLARE_PIPELINE_ENDPOINT = "https://<stream-id>.ingest.cloudflare.com"
 CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "10"
 
+# Optional
+# POSTHOG_TEAM_ID = "1"
+# POSTHOG_GROUP_TYPE_0 = "company"
+# POSTHOG_GROUP_TYPE_1 = "team"
+# POSTHOG_GROUP_TYPE_2 = "project"
+# POSTHOG_GROUP_TYPE_3 = "org"
+# POSTHOG_GROUP_TYPE_4 = "workspace"
+
 [[durable_objects.bindings]]
 name = "PERSONS"
 class_name = "PersonDurableObject"
 
+[[durable_objects.bindings]]
+name = "PERSON_ID_COUNTER"
+class_name = "PersonIdCounterDurableObject"
+
+[[durable_objects.bindings]]
+name = "GROUPS"
+class_name = "GroupDurableObject"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["PersonDurableObject"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["PersonIdCounterDurableObject", "GroupDurableObject"]
 ```
 
 ### Secrets
@@ -223,19 +260,27 @@ SELECT * FROM iceberg_catalog.default.hogflare LIMIT 5;
 - `/alias`
 - `/batch` (mixed events)
 - `/e` (event payloads)
+- `/engage`
+- `/groups`
 
 ### Persons
 
-Identify, capture `$set` / `$set_once`, and alias events update a person record stored in a Durable Object. The record tracks distinct_id aliases plus merged person properties. This state is separate from the pipeline data; it is not written into R2.
+Identify, capture `$set` / `$set_once` / `$unset`, and alias events update a person record stored in a Durable Object. The record tracks distinct_id aliases, person properties, and a sequential `id` plus a UUID. Events include:
+
+- `person_id` (the person UUID)
+- `person_created_at`
+- `person_properties`
+
+Person DO state is not written to R2. Only event-level snapshots are stored in the pipeline sink.
 
 ### Groups
 
 - `/groups` (`$groupidentify` payloads) are forwarded.
-- Group state is not evaluated server-side.
+- Group properties are stored in a Group DO and attached to events as `group_properties`.
+- Group slots (`group0`..`group4`) are mapped by `POSTHOG_GROUP_TYPE_0..4`.
 
 ### Session replay
 
-- `/i/v0/e` stores raw session recording chunks only.
 - `/s` stores raw session recording chunks only.
 
 ### Feature flags
@@ -260,12 +305,19 @@ Each row is a `PipelineEvent` with these columns:
 
 | Field | Type / Notes |
 | --- | --- |
+| `uuid` | string (UUID v4) |
+| `team_id` | int64 (optional) |
 | `source` | string |
-| `event_type` | string |
+| `event` | string |
 | `distinct_id` | string |
-| `timestamp` | RFC3339 timestamp |
+| `timestamp` | RFC3339 timestamp (optional) |
+| `created_at` | RFC3339 timestamp |
 | `properties` | JSON |
 | `context` | JSON |
+| `person_id` | string (person UUID) |
+| `person_created_at` | RFC3339 timestamp |
 | `person_properties` | JSON |
+| `group0..group4` | string (group key slots) |
+| `group_properties` | JSON (by group type) |
 | `api_key` | string |
 | `extra` | JSON |
