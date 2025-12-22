@@ -4,7 +4,7 @@
 
 Hogflare is a Cloudflare Workers ingestion layer for PostHog SDKs. It supports PostHog-style ingestion, stateful persons/groups, and SDK feature flags, then streams events into Cloudflare Pipelines so data lands in R2 as Iceberg/Parquet.
 
-**What works today**
+#### What works today
 
 - Ingestion endpoints: `/capture`, `/identify`, `/alias`, `/batch`, `/e`, `/engage`, `/groups`
 - Persons and groups: `$set`, `$set_once`, `$unset`, aliasing, and group properties
