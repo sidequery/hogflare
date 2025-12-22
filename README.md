@@ -4,6 +4,29 @@
 
 Hogflare is a Cloudflare Workers service that accepts PostHog ingestion requests and forwards them into Cloudflare Pipelines (HTTP stream). It gives you PostHog-compatible ingestion with data landing in R2 as Iceberg/Parquet.
 
+## Architecture
+
+```
+PostHog SDKs
+   |
+   v
+Cloudflare Worker (Hogflare)
+   | \
+   |  \__ Durable Object (persons)
+   |       - merges $set / $set_once
+   |       - applies aliasing
+   |
+   v
+Cloudflare Pipelines (HTTP stream)
+   |
+   v
+R2 (Iceberg / Parquet)
+```
+
+Notes:
+- Events are always forwarded to the pipeline.
+- Person updates are applied statefully in a Durable Object keyed by distinct_id.
+
 ## Why?
 
 PostHog is a nice-to-use web & product analytics platform. However, self-hosting PostHog is prohibitively complex so most users seem to rely on the cloud offering. This is an alternative for cost-conscious data folks & businesses interested in a low maintenance way to ingest web & product analytics directly into a managed data lake.
@@ -40,7 +63,7 @@ Admittedly, PostHog does a *lot* more than this package, but some folks really j
 
 ### Wrangler config
 
-Copy the example (gitignored) and fill in your stream endpoint:
+Copy the example and fill in your stream endpoint:
 
 ```bash
 cp wrangler.toml.example wrangler.toml
@@ -54,6 +77,14 @@ compatibility_date = "2025-01-09"
 [vars]
 CLOUDFLARE_PIPELINE_ENDPOINT = "https://<stream-id>.ingest.cloudflare.com"
 CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "10"
+
+[[durable_objects.bindings]]
+name = "PERSONS"
+class_name = "PersonDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PersonDurableObject"]
 ```
 
 ### Secrets
@@ -196,6 +227,10 @@ Each row is a `PipelineEvent` with these columns:
 - `person_properties` (JSON)
 - `api_key`
 - `extra` (JSON)
+
+## Stateful persons (Durable Objects)
+
+Identify, capture `$set` / `$set_once`, and alias events update a person record stored in a Durable Object. The record tracks distinct_id aliases plus merged person properties. This state is separate from the pipeline data; it is not written into R2.
 
 ## Enrichment
 
