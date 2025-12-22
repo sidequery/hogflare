@@ -232,6 +232,23 @@ Each row is a `PipelineEvent` with these columns:
 
 Identify, capture `$set` / `$set_once`, and alias events update a person record stored in a Durable Object. The record tracks distinct_id aliases plus merged person properties. This state is separate from the pipeline data; it is not written into R2.
 
+## PostHog compatibility
+
+Supported endpoints and behavior:
+
+- `/capture` (single or batch payloads)
+- `/identify`
+- `/alias`
+- `/batch` (mixed events)
+- `/e` (event payloads)
+- `/i/v0/e` (session recording chunks)
+- `/decide` (placeholder response only)
+- `/groups` (`$groupidentify` payloads)
+
+Notes:
+- If `POSTHOG_SIGNING_SECRET` is set, requests must include a valid HMAC signature.
+- Feature flags, persons, and group properties are not evaluated server-side; events are forwarded and person updates are tracked in a Durable Object.
+
 ## Enrichment
 
 Hogflare adds Cloudflare request data into `properties` when those keys are not already present:
