@@ -214,42 +214,39 @@ SELECT count(*) FROM iceberg_catalog.default.hogflare;
 SELECT * FROM iceberg_catalog.default.hogflare LIMIT 5;
 ```
 
-## Event shape in R2
-
-Each row is a `PipelineEvent` with these columns:
-
-- `source`
-- `event_type`
-- `distinct_id`
-- `timestamp` (RFC3339)
-- `properties` (JSON)
-- `context` (JSON)
-- `person_properties` (JSON)
-- `api_key`
-- `extra` (JSON)
-
-## Stateful persons (Durable Objects)
-
-Identify, capture `$set` / `$set_once`, and alias events update a person record stored in a Durable Object. The record tracks distinct_id aliases plus merged person properties. This state is separate from the pipeline data; it is not written into R2.
-
 ## PostHog compatibility
 
-Supported endpoints and behavior:
+### Ingestion endpoints
 
 - `/capture` (single or batch payloads)
 - `/identify`
 - `/alias`
 - `/batch` (mixed events)
 - `/e` (event payloads)
-- `/i/v0/e` (session recording chunks)
-- `/decide` (placeholder response only)
-- `/groups` (`$groupidentify` payloads)
 
-Notes:
+### Persons
+
+Identify, capture `$set` / `$set_once`, and alias events update a person record stored in a Durable Object. The record tracks distinct_id aliases plus merged person properties. This state is separate from the pipeline data; it is not written into R2.
+
+### Groups
+
+- `/groups` (`$groupidentify` payloads) are forwarded.
+- Group state is not evaluated server-side.
+
+### Session replay
+
+- `/i/v0/e` stores raw session recording chunks only.
+- `/s` stores raw session recording chunks only.
+
+### Feature flags
+
+- `/decide` returns placeholders, not evaluated flags.
+
+### Signing
+
 - If `POSTHOG_SIGNING_SECRET` is set, requests must include a valid HMAC signature.
-- Feature flags, persons, and group properties are not evaluated server-side; events are forwarded and person updates are tracked in a Durable Object.
 
-## Enrichment
+### Enrichment
 
 Hogflare adds Cloudflare request data into `properties` when those keys are not already present:
 
@@ -257,7 +254,18 @@ Hogflare adds Cloudflare request data into `properties` when those keys are not 
 - `$geoip_*` from Cloudflare request metadata (country, city, region, lat/long, timezone)
 - `cf_*` fields: `cf_asn`, `cf_as_organization`, `cf_colo`, `cf_metro_code`, `cf_ray`
 
-## Limitations
+## Event shape in R2
 
-- `/decide` returns placeholders, not evaluated flags.
-- `/s` stores raw session recording chunks only.
+Each row is a `PipelineEvent` with these columns:
+
+| Field | Type / Notes |
+| --- | --- |
+| `source` | string |
+| `event_type` | string |
+| `distinct_id` | string |
+| `timestamp` | RFC3339 timestamp |
+| `properties` | JSON |
+| `context` | JSON |
+| `person_properties` | JSON |
+| `api_key` | string |
+| `extra` | JSON |
