@@ -127,6 +127,7 @@ mod durable {
     use super::*;
     use serde::Deserialize;
     use worker::durable_object;
+    use worker::wasm_bindgen;
 
     const RECORD_KEY: &str = "record";
 
