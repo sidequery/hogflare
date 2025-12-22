@@ -2,6 +2,7 @@ pub mod config;
 pub mod extractors;
 pub mod models;
 pub mod pipeline;
+pub mod persons;
 
 use std::sync::Arc;
 
@@ -27,6 +28,10 @@ use models::{
     GroupIdentifyRequest, IdentifyRequest, PostHogResponse,
 };
 use pipeline::{PipelineClient, PipelineError, PipelineEvent};
+use persons::{
+    alias_from_request, update_from_capture, update_from_engage, update_from_identify,
+    NoopPersonStore, PersonAlias, PersonError, PersonStore, PersonUpdate,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -47,12 +52,15 @@ pub(crate) struct AppState {
     pub(crate) decide_api_token: Option<String>,
     pub(crate) session_recording_endpoint: Option<String>,
     pub(crate) signing_secret: Option<String>,
+    pub(crate) person_store: Arc<dyn PersonStore>,
 }
 
 #[derive(Debug, Error)]
 enum AppError {
     #[error(transparent)]
     Pipeline(#[from] PipelineError),
+    #[error(transparent)]
+    Person(#[from] PersonError),
     #[error("invalid payload: {0}")]
     InvalidPayload(String),
     #[error("unauthorized: {0}")]
@@ -67,6 +75,13 @@ impl IntoResponse for AppError {
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal server error".to_string(),
+                )
+            }
+            AppError::Person(err) => {
+                error!(error = %err, "person update failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "person update failed".to_string(),
                 )
             }
             AppError::InvalidPayload(err) => {
@@ -174,18 +189,21 @@ pub async fn fetch(
         }
     };
 
+    let person_store: Arc<dyn PersonStore> = persons::store_from_env(&env);
+
     let mut router = build_router_with_options(
         Arc::new(pipeline),
         config.posthog_project_api_key.clone(),
         config.session_recording_endpoint.clone(),
         config.posthog_signing_secret.clone(),
+        person_store,
     );
 
     Ok(router.call(req).await?)
 }
 
 pub fn build_router(pipeline: Arc<PipelineClient>) -> Router {
-    build_router_with_options(pipeline, None, None, None)
+    build_router_with_options(pipeline, None, None, None, Arc::new(NoopPersonStore))
 }
 
 pub fn build_router_with_options(
@@ -193,18 +211,30 @@ pub fn build_router_with_options(
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
+    person_store: Arc<dyn PersonStore>,
 ) -> Router {
     router(build_state(
         pipeline,
         decide_api_token,
         session_recording_endpoint,
         signing_secret,
+        person_store,
     ))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Result<(), RunError> {
-    serve_with_state(listener, build_state(pipeline, None, None, None)).await
+    serve_with_state(
+        listener,
+        build_state(
+            pipeline,
+            None,
+            None,
+            None,
+            Arc::new(NoopPersonStore),
+        ),
+    )
+    .await
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -220,6 +250,7 @@ pub async fn serve_with_options(
         decide_api_token,
         session_recording_endpoint,
         signing_secret,
+        Arc::new(NoopPersonStore),
     );
     serve_with_state(listener, state).await
 }
@@ -258,12 +289,14 @@ fn build_state(
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
+    person_store: Arc<dyn PersonStore>,
 ) -> AppState {
     AppState {
         pipeline,
         decide_api_token,
         session_recording_endpoint,
         signing_secret,
+        person_store,
     }
 }
 
@@ -295,15 +328,22 @@ async fn capture(
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
-    let events = payload
-        .items
-        .into_iter()
-        .map(|item| {
+    let mut events = Vec::new();
+    let mut updates = Vec::new();
+
+    for item in payload.items {
+        if let Some(update) = update_from_capture(&item) {
+            updates.push(update);
+        }
+
+        events.push(
             PipelineEvent::from_capture(item)
                 .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment)
-        })
-        .collect();
+                .with_enrichment(enrichment),
+        );
+    }
+
+    apply_person_updates(&state, updates).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -377,6 +417,10 @@ async fn browser_capture(
             context: None,
             extra,
         };
+        if let Some(update) = update_from_identify(&identify_req) {
+            apply_person_update(&state, update).await?;
+        }
+
         PipelineEvent::from_identify(identify_req)
     } else if payload.event == "$groupidentify" {
         // Handle group identify - extract group_type and group_key from $set
@@ -410,6 +454,10 @@ async fn browser_capture(
             context: None,
             extra: std::collections::HashMap::new(),
         };
+
+        if let Some(update) = update_from_capture(&capture_req) {
+            apply_person_update(&state, update).await?;
+        }
         PipelineEvent::from_capture(capture_req)
     };
 
@@ -428,15 +476,22 @@ async fn identify(
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
-    let events = payload
-        .items
-        .into_iter()
-        .map(|item| {
+    let mut events = Vec::new();
+    let mut updates = Vec::new();
+
+    for item in payload.items {
+        if let Some(update) = update_from_identify(&item) {
+            updates.push(update);
+        }
+
+        events.push(
             PipelineEvent::from_identify(item)
                 .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment)
-        })
-        .collect();
+                .with_enrichment(enrichment),
+        );
+    }
+
+    apply_person_updates(&state, updates).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -450,8 +505,14 @@ async fn batch(
     let sent_at = payload.batch.sent_at.clone();
     let shared_api_key = payload.batch.api_key.clone();
     let enrichment = enrichment.properties();
-    let events = convert_batch(payload.batch, shared_api_key)
-        .map_err(AppError::InvalidPayload)?
+    let conversion = convert_batch(payload.batch, shared_api_key)
+        .map_err(AppError::InvalidPayload)?;
+
+    apply_person_updates(&state, conversion.updates).await?;
+    apply_person_aliases(&state, conversion.aliases).await?;
+
+    let events = conversion
+        .events
         .into_iter()
         .map(|event| {
             event
@@ -492,15 +553,19 @@ async fn alias(
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
-    let events = payload
-        .items
-        .into_iter()
-        .map(|item| {
+    let mut events = Vec::new();
+    let mut aliases = Vec::new();
+
+    for item in payload.items {
+        aliases.push(alias_from_request(&item));
+        events.push(
             PipelineEvent::from_alias(item)
                 .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment)
-        })
-        .collect();
+                .with_enrichment(enrichment),
+        );
+    }
+
+    apply_person_aliases(&state, aliases).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -513,15 +578,22 @@ async fn engage(
 ) -> Result<Json<PostHogResponse>, AppError> {
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
-    let events = payload
-        .items
-        .into_iter()
-        .map(|item| {
+    let mut events = Vec::new();
+    let mut updates = Vec::new();
+
+    for item in payload.items {
+        if let Some(update) = update_from_engage(&item) {
+            updates.push(update);
+        }
+
+        events.push(
             PipelineEvent::from_engage(item)
                 .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment)
-        })
-        .collect();
+                .with_enrichment(enrichment),
+        );
+    }
+
+    apply_person_updates(&state, updates).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -615,21 +687,71 @@ pub enum RunError {
     Serve(String),
 }
 
+async fn apply_person_updates(
+    state: &AppState,
+    updates: Vec<PersonUpdate>,
+) -> Result<(), AppError> {
+    for update in updates {
+        if update.is_empty() {
+            continue;
+        }
+        state.person_store.apply_update(update).await?;
+    }
+    Ok(())
+}
+
+async fn apply_person_update(
+    state: &AppState,
+    update: PersonUpdate,
+) -> Result<(), AppError> {
+    if update.is_empty() {
+        return Ok(());
+    }
+    state.person_store.apply_update(update).await?;
+    Ok(())
+}
+
+async fn apply_person_aliases(
+    state: &AppState,
+    aliases: Vec<PersonAlias>,
+) -> Result<(), AppError> {
+    for alias in aliases {
+        state.person_store.apply_alias(alias).await?;
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct BatchConversion {
+    events: Vec<PipelineEvent>,
+    updates: Vec<PersonUpdate>,
+    aliases: Vec<PersonAlias>,
+}
+
 fn convert_batch(
     batch: BatchRequest,
     shared_api_key: Option<String>,
-) -> Result<Vec<PipelineEvent>, String> {
-    batch
-        .batch
-        .into_iter()
-        .map(|value| convert_batch_item(value, shared_api_key.as_ref()))
-        .collect()
+) -> Result<BatchConversion, String> {
+    let mut conversion = BatchConversion::default();
+
+    for value in batch.batch {
+        let item = convert_batch_item(value, shared_api_key.as_ref())?;
+        conversion.events.push(item.event);
+        if let Some(update) = item.update {
+            conversion.updates.push(update);
+        }
+        if let Some(alias) = item.alias {
+            conversion.aliases.push(alias);
+        }
+    }
+
+    Ok(conversion)
 }
 
 fn convert_batch_item(
     mut value: Value,
     shared_api_key: Option<&String>,
-) -> Result<PipelineEvent, String> {
+) -> Result<BatchItemConversion, String> {
     let (event_field, type_field, has_alias_fields) = {
         let map = value
             .as_object_mut()
@@ -658,7 +780,14 @@ fn convert_batch_item(
         || matches!(event_field.as_deref(), Some("$identify"))
     {
         return serde_json::from_value::<IdentifyRequest>(value)
-            .map(PipelineEvent::from_identify)
+            .map(|request| {
+                let update = update_from_identify(&request);
+                BatchItemConversion {
+                    event: PipelineEvent::from_identify(request),
+                    update,
+                    alias: None,
+                }
+            })
             .map_err(|err| format!("invalid identify event: {err}"));
     }
 
@@ -667,7 +796,11 @@ fn convert_batch_item(
         || matches!(event_field.as_deref(), Some("$groupidentify"))
     {
         return serde_json::from_value::<GroupIdentifyRequest>(value)
-            .map(PipelineEvent::from_group_identify)
+            .map(|request| BatchItemConversion {
+                event: PipelineEvent::from_group_identify(request),
+                update: None,
+                alias: None,
+            })
             .map_err(|err| format!("invalid group identify event: {err}"));
     }
 
@@ -676,17 +809,44 @@ fn convert_batch_item(
         || has_alias_fields
     {
         return serde_json::from_value::<AliasRequest>(value)
-            .map(PipelineEvent::from_alias)
+            .map(|request| {
+                let alias = alias_from_request(&request);
+                BatchItemConversion {
+                    event: PipelineEvent::from_alias(request),
+                    update: None,
+                    alias: Some(alias),
+                }
+            })
             .map_err(|err| format!("invalid alias event: {err}"));
     }
 
     if matches!(type_field.as_deref(), Some("engage")) {
         return serde_json::from_value::<EngageRequest>(value)
-            .map(PipelineEvent::from_engage)
+            .map(|request| {
+                let update = update_from_engage(&request);
+                BatchItemConversion {
+                    event: PipelineEvent::from_engage(request),
+                    update,
+                    alias: None,
+                }
+            })
             .map_err(|err| format!("invalid engage event: {err}"));
     }
 
     serde_json::from_value::<CaptureRequest>(value)
-        .map(PipelineEvent::from_capture)
+        .map(|request| {
+            let update = update_from_capture(&request);
+            BatchItemConversion {
+                event: PipelineEvent::from_capture(request),
+                update,
+                alias: None,
+            }
+        })
         .map_err(|err| format!("invalid capture event: {err}"))
+}
+
+struct BatchItemConversion {
+    event: PipelineEvent,
+    update: Option<PersonUpdate>,
+    alias: Option<PersonAlias>,
 }

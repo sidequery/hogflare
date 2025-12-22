@@ -5,3 +5,11 @@ compatibility_date = "2025-01-09"
 [vars]
 CLOUDFLARE_PIPELINE_ENDPOINT = "https://<stream-id>.ingest.cloudflare.com"
 CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "10"
+
+[[durable_objects.bindings]]
+name = "PERSONS"
+class_name = "PersonDurableObject"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["PersonDurableObject"]

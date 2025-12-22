@@ -772,7 +772,7 @@ mod tests {
     use serde_json::{json, Value};
     use std::{io::Write, sync::Arc, time::Duration};
 
-    use crate::{models::CaptureRequest, pipeline::PipelineClient, AppState};
+    use crate::{models::CaptureRequest, pipeline::PipelineClient, persons::NoopPersonStore, AppState};
     use reqwest::Url;
 
     fn test_state() -> AppState {
@@ -788,6 +788,7 @@ mod tests {
             decide_api_token: None,
             session_recording_endpoint: None,
             signing_secret: None,
+            person_store: Arc::new(NoopPersonStore),
         }
     }
 
