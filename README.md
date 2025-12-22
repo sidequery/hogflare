@@ -14,36 +14,45 @@ Hogflare is a Cloudflare Workers ingestion layer for PostHog SDKs. It supports P
 ## Architecture
 
 ```
-                +----------------------+
-                |     PostHog SDKs     |
-                +----------------------+
-                   |              ^
-                   | ingest       | flags + decide
-                   v              |
-                +----------------------+
-                |  Worker (Hogflare)   |
-                +----------------------+
-                   |          |
-                   |          |
-                   v          v
-        +----------------+  +----------------+
-        |  Persons DO    |  |  Groups DO     |
-        +----------------+  +----------------+
-                   |
-                   v
-        +------------------------+
-        | Cloudflare Pipelines   |
-        +------------------------+
-                   |
-                   v
-        +------------------------+
-        | R2 (Iceberg/Parquet)   |
-        +------------------------+
++----------------------+
+|     PostHog SDKs     |
++----------------------+
+  | ingest       | flags/decide
+  v              v
++----------------------+
+|  Worker (Hogflare)   |
++----------------------+
+  |\
+  | \-- read/write --> +-----------+
+  |                   | Groups DO |
+  |                   +-----------+
+  |
+  |-- read/write --> +---------------------+
+  |                  | Persons DO          |
+  |                  +---------------------+
+  |                            |
+  |                            v
+  |                  +------------------+
+  |                  | Person ID DO     |
+  |                  | (seq)            |
+  |                  +------------------+
+  |
+  | events
+  v
++--------------------------+
+| Cloudflare Pipelines     |
++--------------------------+
+  |
+  v
++--------------------------+
+| R2 Data Catalog          |
+| (Iceberg/Parquet)        |
++--------------------------+
 ```
 
 Notes:
-- Events are always forwarded to the pipeline.
-- Person and group updates are applied statefully in Durable Objects keyed by distinct_id or group key.
+- The pipeline never calls DOs. Only the Worker reads/writes Persons + Groups state.
+- Person ID counter is only accessed by the Persons DO.
 
 ## Why?
 
