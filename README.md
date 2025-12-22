@@ -84,6 +84,30 @@ curl -X POST https://<your-worker>.workers.dev/capture \
   ]'
 ```
 
+## HMAC signing (optional)
+
+If `POSTHOG_SIGNING_SECRET` is set, requests must include a valid signature.
+
+```bash
+payload='[
+  {
+    "api_key": "phc_example",
+    "event": "purchase",
+    "distinct_id": "user_12345",
+    "properties": { "amount": 29.99 }
+  }
+]'
+
+signature=$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$POSTHOG_SIGNING_SECRET" | awk '{print $2}')
+
+curl -X POST https://<your-worker>.workers.dev/capture \
+  -H "Content-Type: application/json" \
+  -H "X-POSTHOG-SIGNATURE: sha256=$signature" \
+  -d "$payload"
+```
+
+Note: `X-HUB-SIGNATURE` with `sha1=` is also accepted for GitHub-style webhook compatibility.
+
 ## PostHog SDK config
 
 ### Browser (posthog-js)
