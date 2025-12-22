@@ -334,7 +334,7 @@ pub enum PipelineError {
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn converts_group_identify_payload() {
@@ -429,5 +429,47 @@ mod tests {
         assert_eq!(event.distinct_id, "recording-user");
         assert_eq!(event.api_key.as_deref(), Some("phc_session"));
         assert_eq!(event.properties, Some(payload));
+    }
+
+    #[test]
+    fn merges_enrichment_without_overwrite() {
+        let payload = CaptureRequest {
+            api_key: Some("phc_capture".to_string()),
+            event: "test-event".to_string(),
+            distinct_id: "user-1".to_string(),
+            properties: Some(json!({
+                "$ip": "203.0.113.1",
+                "existing": true
+            })),
+            timestamp: None,
+            context: None,
+            extra: std::collections::HashMap::new(),
+        };
+
+        let mut enrichment = Map::new();
+        enrichment.insert(
+            "$ip".to_string(),
+            Value::String("198.51.100.2".to_string()),
+        );
+        enrichment.insert(
+            "cf_ray".to_string(),
+            Value::String("ray-xyz".to_string()),
+        );
+
+        let event = PipelineEvent::from_capture(payload).with_enrichment(&enrichment);
+        let props = match event.properties {
+            Some(Value::Object(props)) => props,
+            other => panic!("expected properties object, got {other:?}"),
+        };
+
+        assert_eq!(
+            props.get("$ip"),
+            Some(&Value::String("203.0.113.1".to_string()))
+        );
+        assert_eq!(
+            props.get("cf_ray"),
+            Some(&Value::String("ray-xyz".to_string()))
+        );
+        assert_eq!(props.get("existing"), Some(&Value::Bool(true)));
     }
 }

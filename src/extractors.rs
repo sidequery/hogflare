@@ -769,7 +769,7 @@ mod tests {
     use chrono::TimeZone;
     use flate2::write::{GzEncoder, ZlibEncoder};
     use flate2::Compression;
-    use serde_json::json;
+    use serde_json::{json, Value};
     use std::{io::Write, sync::Arc, time::Duration};
 
     use crate::{models::CaptureRequest, pipeline::PipelineClient, AppState};
@@ -1038,5 +1038,43 @@ mod tests {
         assert_eq!(payload.batch.batch[0]["distinct_id"], "wrapped-user");
         let expected = chrono::Utc.with_ymd_and_hms(2025, 2, 2, 0, 0, 0).unwrap();
         assert_eq!(payload.batch.sent_at, Some(expected));
+    }
+
+    #[test]
+    fn enrichment_reads_cloudflare_headers() {
+        let request = Request::builder()
+            .uri("/capture")
+            .header("cf-connecting-ip", "203.0.113.10")
+            .header("cf-ray", "ray-123")
+            .body(Body::empty())
+            .unwrap();
+        let (parts, _) = request.into_parts();
+
+        let props = build_enrichment_properties(&parts);
+
+        assert_eq!(
+            props.get("$ip"),
+            Some(&Value::String("203.0.113.10".to_string()))
+        );
+        assert_eq!(
+            props.get("cf_ray"),
+            Some(&Value::String("ray-123".to_string()))
+        );
+    }
+
+    #[test]
+    fn enrichment_ignores_empty_header_values() {
+        let request = Request::builder()
+            .uri("/capture")
+            .header("cf-connecting-ip", "   ")
+            .header("cf-ray", "")
+            .body(Body::empty())
+            .unwrap();
+        let (parts, _) = request.into_parts();
+
+        let props = build_enrichment_properties(&parts);
+
+        assert!(props.get("$ip").is_none());
+        assert!(props.get("cf_ray").is_none());
     }
 }

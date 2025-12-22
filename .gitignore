@@ -8,4 +8,5 @@ tests/js_client/node_modules/
 dist/
 wrangler.toml
 scripts/setup-cloudflare.sh
+scripts/pipeline-schema.json
 .claude/

@@ -6,7 +6,7 @@ Hogflare is a Cloudflare Workers service that accepts PostHog ingestion requests
 
 ## Why?
 
-PostHog is a nice-to-use web & product analytics platform. However, self-hosting PostHog is prohibitively complex so most users seem to rely on the cloud offering. This is an alternative for cost-conscious data folks & businesses interested in a low maintenance way to ingest web & product analytics directly into a managed data lake. 
+PostHog is a nice-to-use web & product analytics platform. However, self-hosting PostHog is prohibitively complex so most users seem to rely on the cloud offering. This is an alternative for cost-conscious data folks & businesses interested in a low maintenance way to ingest web & product analytics directly into a managed data lake.
 
 A [hobby deployment of PostHog](https://github.com/PostHog/posthog/blob/master/docker-compose.hobby.yml) includes: postgres, redis, redis7, clickhouse, zookeeper, kafka, worker, web, plugins, proxy, objectstorage, seaweedfs, asyncmigrationscheck, temporal, elasticsearch, temporal-admin-tools, temporal-ui, temporal-django-worker, cyclotron-janitor, capture, replay-capture, property-defs-rs, livestream, feature-flags, cymbal
 
@@ -16,7 +16,7 @@ Admittedly, PostHog does a *lot* more than this package, but some folks really j
 
 1) Create a Pipeline stream and sink in the Cloudflare dashboard or via `wrangler pipelines setup`.
 2) Use the schema below for the stream.
-3) Create a local `wrangler.toml` (gitignored) and set variables.
+3) Copy `wrangler.toml.example` to `wrangler.toml` and set variables.
 4) Set Wrangler secrets.
 5) Deploy the Worker.
 
@@ -38,11 +38,17 @@ Admittedly, PostHog does a *lot* more than this package, but some folks really j
 }
 ```
 
-### Local `wrangler.toml` (gitignored)
+### Wrangler config
+
+Copy the example (gitignored) and fill in your stream endpoint:
+
+```bash
+cp wrangler.toml.example wrangler.toml
+```
 
 ```toml
 name = "hogflare"
-main = "build/index.js"
+main = "build/index.js" # generated entrypoint from worker-build for the Rust worker
 compatibility_date = "2025-01-09"
 
 [vars]
@@ -78,6 +84,35 @@ curl -X POST https://<your-worker>.workers.dev/capture \
   ]'
 ```
 
+## PostHog SDK config (posthog-js)
+
+```js
+import posthog from "posthog-js";
+
+posthog.init("<project_api_key>", {
+  api_host: "https://<your-worker>.workers.dev",
+  capture_pageview: true,
+});
+```
+
+## Local development (fake pipeline)
+
+The repo includes a lightweight fake pipeline (FastAPI + DuckDB) used by tests.
+
+```bash
+docker compose up --build -d fake-pipeline
+```
+
+```bash
+# .env.local (not committed)
+CLOUDFLARE_PIPELINE_ENDPOINT=http://127.0.0.1:8088/
+CLOUDFLARE_PIPELINE_TIMEOUT_SECS=5
+```
+
+```bash
+cargo run
+```
+
 ## Query data (DuckDB)
 
 ```sql
@@ -85,14 +120,6 @@ INSTALL httpfs;
 INSTALL iceberg;
 LOAD httpfs;
 LOAD iceberg;
-
-CREATE SECRET r2_secret (
-  TYPE S3,
-  KEY_ID '<R2_ACCESS_KEY_ID>',
-  SECRET '<R2_SECRET_ACCESS_KEY>',
-  ENDPOINT '<ACCOUNT_ID>.r2.cloudflarestorage.com',
-  REGION 'auto'
-);
 
 CREATE SECRET r2_catalog_secret (
   TYPE ICEBERG,
@@ -132,6 +159,5 @@ Hogflare adds Cloudflare request data into `properties` when those keys are not 
 
 ## Limitations
 
-- This repo does not include a local Pipelines emulator. You need a real Cloudflare Pipeline endpoint.
 - `/decide` returns placeholders, not evaluated flags.
 - `/s` stores raw session recording chunks only.
