@@ -84,7 +84,9 @@ curl -X POST https://<your-worker>.workers.dev/capture \
   ]'
 ```
 
-## PostHog SDK config (posthog-js)
+## PostHog SDK config
+
+### Browser (posthog-js)
 
 ```js
 import posthog from "posthog-js";
@@ -94,6 +96,28 @@ posthog.init("<project_api_key>", {
   capture_pageview: true,
 });
 ```
+
+### Server (posthog-node)
+
+```js
+import { PostHog } from "posthog-node";
+
+const client = new PostHog("<project_api_key>", {
+  host: "https://<your-worker>.workers.dev",
+});
+
+client.capture({
+  distinctId: "user_123",
+  event: "purchase",
+  properties: { amount: 29.99 },
+});
+
+await client.shutdown();
+```
+
+### Other SDKs
+
+Set the SDK host/base URL to your Worker (`https://<your-worker>.workers.dev`) and use your project API key. Most SDKs use either `api_host` (browser/mobile) or `host` (server).
 
 ## Local development (fake pipeline)
 

@@ -231,6 +231,7 @@ fn router(state: AppState) -> Router {
         .route("/e/", post(browser_capture))
         .route("/identify", post(identify))
         .route("/batch", post(batch))
+        .route("/batch/", post(batch))
         .route("/groups", post(groups))
         .route("/alias", post(alias))
         .route("/engage", post(engage))
