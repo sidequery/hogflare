@@ -7,6 +7,7 @@ use serde_json::{Map, Value};
 use thiserror::Error;
 use tracing::{info, instrument};
 use url::Url;
+use uuid::Uuid;
 
 #[cfg(not(target_arch = "wasm32"))]
 use reqwest::Client;
@@ -144,9 +145,13 @@ impl PipelineClient {
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub struct PipelineEvent {
+    pub uuid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<i64>,
     pub source: &'static str,
-    pub event_type: String,
+    pub event: String,
     pub distinct_id: String,
+    pub created_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -154,7 +159,23 @@ pub struct PipelineEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub person_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person_created_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub person_properties: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group0: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group1: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group2: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group3: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group4: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_properties: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
     #[serde(skip_serializing_if = "hash_map_is_empty")]
@@ -164,13 +185,24 @@ pub struct PipelineEvent {
 impl PipelineEvent {
     pub fn from_capture(payload: CaptureRequest) -> Self {
         Self {
+            uuid: Uuid::new_v4().to_string(),
+            team_id: None,
             source: "posthog",
-            event_type: payload.event,
+            event: payload.event,
             distinct_id: payload.distinct_id,
+            created_at: Utc::now(),
             timestamp: payload.timestamp,
             properties: payload.properties,
             context: payload.context,
+            person_id: None,
+            person_created_at: None,
             person_properties: None,
+            group0: None,
+            group1: None,
+            group2: None,
+            group3: None,
+            group4: None,
+            group_properties: None,
             api_key: payload.api_key,
             extra: payload.extra,
         }
@@ -178,13 +210,24 @@ impl PipelineEvent {
 
     pub fn from_identify(payload: IdentifyRequest) -> Self {
         Self {
+            uuid: Uuid::new_v4().to_string(),
+            team_id: None,
             source: "posthog",
-            event_type: "$identify".to_string(),
+            event: "$identify".to_string(),
             distinct_id: payload.distinct_id,
+            created_at: Utc::now(),
             timestamp: payload.timestamp,
             properties: None,
             context: payload.context,
+            person_id: None,
+            person_created_at: None,
             person_properties: payload.properties,
+            group0: None,
+            group1: None,
+            group2: None,
+            group3: None,
+            group4: None,
+            group_properties: None,
             api_key: payload.api_key,
             extra: payload.extra,
         }
@@ -202,13 +245,24 @@ impl PipelineEvent {
         );
 
         Self {
+            uuid: Uuid::new_v4().to_string(),
+            team_id: None,
             source: "posthog",
-            event_type: "$groupidentify".to_string(),
+            event: "$groupidentify".to_string(),
             distinct_id: payload.group_key,
+            created_at: Utc::now(),
             timestamp: payload.timestamp,
             properties: payload.properties,
             context: None,
+            person_id: None,
+            person_created_at: None,
             person_properties: None,
+            group0: None,
+            group1: None,
+            group2: None,
+            group3: None,
+            group4: None,
+            group_properties: None,
             api_key: payload.api_key,
             extra,
         }
@@ -219,13 +273,24 @@ impl PipelineEvent {
         extra.insert("alias".to_string(), Value::String(payload.alias.clone()));
 
         Self {
+            uuid: Uuid::new_v4().to_string(),
+            team_id: None,
             source: "posthog",
-            event_type: "$create_alias".to_string(),
+            event: "$create_alias".to_string(),
             distinct_id: payload.distinct_id,
+            created_at: Utc::now(),
             timestamp: payload.timestamp,
             properties: None,
             context: None,
+            person_id: None,
+            person_created_at: None,
             person_properties: None,
+            group0: None,
+            group1: None,
+            group2: None,
+            group3: None,
+            group4: None,
+            group_properties: None,
             api_key: payload.api_key,
             extra,
         }
@@ -247,13 +312,24 @@ impl PipelineEvent {
         }
 
         Self {
+            uuid: Uuid::new_v4().to_string(),
+            team_id: None,
             source: "posthog",
-            event_type: "$engage".to_string(),
+            event: "$engage".to_string(),
             distinct_id: payload.distinct_id,
+            created_at: Utc::now(),
             timestamp: payload.timestamp,
             properties: None,
             context: None,
+            person_id: None,
+            person_created_at: None,
             person_properties: None,
+            group0: None,
+            group1: None,
+            group2: None,
+            group3: None,
+            group4: None,
+            group_properties: None,
             api_key: payload.api_key,
             extra,
         }
@@ -265,16 +341,64 @@ impl PipelineEvent {
         api_key: Option<String>,
     ) -> Self {
         Self {
+            uuid: Uuid::new_v4().to_string(),
+            team_id: None,
             source: "posthog",
-            event_type: "$snapshot".to_string(),
+            event: "$snapshot".to_string(),
             distinct_id,
+            created_at: Utc::now(),
             timestamp: None,
             properties: Some(payload),
             context: None,
+            person_id: None,
+            person_created_at: None,
             person_properties: None,
+            group0: None,
+            group1: None,
+            group2: None,
+            group3: None,
+            group4: None,
+            group_properties: None,
             api_key,
             extra: std::collections::HashMap::new(),
         }
+    }
+
+    pub fn with_team_id(mut self, team_id: Option<i64>) -> Self {
+        self.team_id = team_id;
+        self
+    }
+
+    pub fn with_person(
+        mut self,
+        person_id: Option<String>,
+        person_created_at: Option<DateTime<Utc>>,
+        person_properties: Option<Value>,
+    ) -> Self {
+        if let Some(person_id) = person_id {
+            self.person_id = Some(person_id);
+        }
+        if let Some(person_created_at) = person_created_at {
+            self.person_created_at = Some(person_created_at);
+        }
+        if let Some(person_properties) = person_properties {
+            self.person_properties = Some(person_properties);
+        }
+        self
+    }
+
+    pub fn with_groups(
+        mut self,
+        group_slots: [Option<String>; 5],
+        group_properties: Option<Value>,
+    ) -> Self {
+        self.group0 = group_slots[0].clone();
+        self.group1 = group_slots[1].clone();
+        self.group2 = group_slots[2].clone();
+        self.group3 = group_slots[3].clone();
+        self.group4 = group_slots[4].clone();
+        self.group_properties = group_properties;
+        self
     }
 
     pub fn with_sent_at(mut self, sent_at: Option<DateTime<Utc>>) -> Self {
@@ -353,7 +477,7 @@ mod tests {
 
         let event = PipelineEvent::from_group_identify(payload);
 
-        assert_eq!(event.event_type, "$groupidentify");
+        assert_eq!(event.event, "$groupidentify");
         assert_eq!(event.distinct_id, "group_1");
         assert_eq!(event.api_key.as_deref(), Some("phc_group"));
         assert_eq!(event.properties, Some(json!({ "size": 10 })));
@@ -382,7 +506,7 @@ mod tests {
         };
 
         let event = PipelineEvent::from_alias(payload);
-        assert_eq!(event.event_type, "$create_alias");
+        assert_eq!(event.event, "$create_alias");
         assert_eq!(event.distinct_id, "primary");
         assert_eq!(
             event.extra.get("alias"),
@@ -404,7 +528,7 @@ mod tests {
         };
 
         let event = PipelineEvent::from_engage(payload);
-        assert_eq!(event.event_type, "$engage");
+        assert_eq!(event.event, "$engage");
         assert_eq!(event.extra.get("$set").unwrap(), &json!({ "name": "Alex" }));
     }
 
@@ -426,7 +550,7 @@ mod tests {
             Some("phc_session".to_string()),
         );
 
-        assert_eq!(event.event_type, "$snapshot");
+        assert_eq!(event.event, "$snapshot");
         assert_eq!(event.distinct_id, "recording-user");
         assert_eq!(event.api_key.as_deref(), Some("phc_session"));
         assert_eq!(event.properties, Some(payload));

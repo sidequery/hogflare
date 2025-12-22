@@ -26,6 +26,9 @@ pub struct IdentifyRequest {
     #[serde(default)]
     pub api_key: Option<String>,
     pub distinct_id: String,
+    #[serde(rename = "$anon_distinct_id")]
+    #[serde(default)]
+    pub anon_distinct_id: Option<String>,
     #[serde(default)]
     pub properties: Option<Value>,
     #[serde(default)]
@@ -198,20 +201,19 @@ mod tests {
 
         let event = PipelineEvent::from_capture(payload);
 
+        assert_eq!(event.source, "posthog");
+        assert_eq!(event.event, "test-event");
+        assert_eq!(event.distinct_id, "abc123");
         assert_eq!(
-            event,
-            PipelineEvent {
-                source: "posthog",
-                event_type: "test-event".to_string(),
-                distinct_id: "abc123".to_string(),
-                timestamp: Some(Utc.timestamp_millis_opt(1_696_000_000_000).unwrap()),
-                properties: Some(json!({ "path": "/" })),
-                context: Some(json!({ "ip": "127.0.0.1" })),
-                person_properties: None,
-                api_key: Some("phc_test".to_string()),
-                extra,
-            }
+            event.timestamp,
+            Some(Utc.timestamp_millis_opt(1_696_000_000_000).unwrap())
         );
+        assert_eq!(event.properties, Some(json!({ "path": "/" })));
+        assert_eq!(event.context, Some(json!({ "ip": "127.0.0.1" })));
+        assert_eq!(event.person_properties, None);
+        assert_eq!(event.api_key, Some("phc_test".to_string()));
+        assert_eq!(event.extra, extra);
+        assert!(!event.uuid.is_empty());
     }
 
     #[test]
@@ -224,6 +226,7 @@ mod tests {
         let payload = IdentifyRequest {
             api_key: None,
             distinct_id: "user_1".to_string(),
+            anon_distinct_id: None,
             properties: Some(json!({ "email": "test@example.com" })),
             timestamp: Some(Utc.timestamp_millis_opt(1_696_000_500_000).unwrap()),
             context: None,
@@ -232,20 +235,22 @@ mod tests {
 
         let event = PipelineEvent::from_identify(payload);
 
+        assert_eq!(event.source, "posthog");
+        assert_eq!(event.event, "$identify");
+        assert_eq!(event.distinct_id, "user_1");
         assert_eq!(
-            event,
-            PipelineEvent {
-                source: "posthog",
-                event_type: "$identify".to_string(),
-                distinct_id: "user_1".to_string(),
-                timestamp: Some(Utc.timestamp_millis_opt(1_696_000_500_000).unwrap()),
-                properties: None,
-                context: None,
-                person_properties: Some(json!({ "email": "test@example.com" })),
-                api_key: None,
-                extra,
-            }
+            event.timestamp,
+            Some(Utc.timestamp_millis_opt(1_696_000_500_000).unwrap())
         );
+        assert_eq!(event.properties, None);
+        assert_eq!(event.context, None);
+        assert_eq!(
+            event.person_properties,
+            Some(json!({ "email": "test@example.com" }))
+        );
+        assert_eq!(event.api_key, None);
+        assert_eq!(event.extra, extra);
+        assert!(!event.uuid.is_empty());
     }
 
     #[test]

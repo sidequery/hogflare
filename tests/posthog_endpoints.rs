@@ -54,7 +54,7 @@ async fn capture_requires_signature_when_secret_configured(
 
     let events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["event_type"], "signed-event");
+    assert_eq!(events[0]["event"], "signed-event");
     assert_eq!(events[0]["api_key"], "phc_signature");
 
     cleanup(server_handle, pipeline_handle).await;
@@ -95,7 +95,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let capture_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(capture_events.len(), 1);
-    assert_eq!(capture_events[0]["event_type"], "integration-capture");
+    assert_eq!(capture_events[0]["event"], "integration-capture");
     assert_eq!(capture_events[0]["api_key"], "phc_header_capture");
     assert_eq!(capture_events[0]["extra"]["library"], "tests");
     assert_eq!(
@@ -120,7 +120,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let identify_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(identify_events.len(), 1);
-    assert_eq!(identify_events[0]["event_type"], "$identify");
+    assert_eq!(identify_events[0]["event"], "$identify");
     assert_eq!(
         identify_events[0]["person_properties"]["email"],
         "id@example.com"
@@ -143,7 +143,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let group_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(group_events.len(), 1);
-    assert_eq!(group_events[0]["event_type"], "$groupidentify");
+    assert_eq!(group_events[0]["event"], "$groupidentify");
     assert_eq!(group_events[0]["extra"]["group_type"], "team");
 
     // batch with mixed event types
@@ -183,16 +183,16 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let batch_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(batch_events.len(), 4);
-    assert_eq!(batch_events[0]["event_type"], "batched-one");
+    assert_eq!(batch_events[0]["event"], "batched-one");
     assert_eq!(batch_events[0]["api_key"], "phc_batch_header");
-    assert_eq!(batch_events[1]["event_type"], "$identify");
+    assert_eq!(batch_events[1]["event"], "$identify");
     assert_eq!(
         batch_events[1]["person_properties"]["email"],
         "batched@example.com"
     );
-    assert_eq!(batch_events[2]["event_type"], "$create_alias");
+    assert_eq!(batch_events[2]["event"], "$create_alias");
     assert_eq!(batch_events[2]["extra"]["alias"], "batch-alias");
-    assert_eq!(batch_events[3]["event_type"], "$groupidentify");
+    assert_eq!(batch_events[3]["event"], "$groupidentify");
     assert_eq!(batch_events[3]["extra"]["group_type"], "company");
 
     // alias endpoint
@@ -211,7 +211,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let alias_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(alias_events.len(), 1);
-    assert_eq!(alias_events[0]["event_type"], "$create_alias");
+    assert_eq!(alias_events[0]["event"], "$create_alias");
     assert_eq!(alias_events[0]["extra"]["alias"], "alias-new");
 
     // engage endpoint
@@ -231,7 +231,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let engage_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(engage_events.len(), 1);
-    assert_eq!(engage_events[0]["event_type"], "$engage");
+    assert_eq!(engage_events[0]["event"], "$engage");
     assert_eq!(engage_events[0]["extra"]["$set"]["name"], "Alex");
 
     // decide should surface payload token and configured defaults
@@ -271,7 +271,7 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let session_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(session_events.len(), 1);
-    assert_eq!(session_events[0]["event_type"], "$snapshot");
+    assert_eq!(session_events[0]["event"], "$snapshot");
     assert_eq!(
         session_events[0]["properties"]["data"]["metadata"]["distinct_id"],
         "session-user"

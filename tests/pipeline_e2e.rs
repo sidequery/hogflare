@@ -134,7 +134,7 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
             events
                 .iter()
                 .find(|event| {
-                    event["event_type"] == event_type
+                event["event"] == event_type
                         && distinct_id.map_or(true, |id| event["distinct_id"] == id)
                 })
                 .unwrap_or_else(|| {
@@ -149,7 +149,7 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
         let identify_direct = events
             .iter()
             .find(|event| {
-                event["event_type"] == "$identify"
+                event["event"] == "$identify"
                     && event["person_properties"]["email"] == "user1@example.com"
             })
             .expect("missing direct identify event");
@@ -162,7 +162,7 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
         let alias_direct = events
             .iter()
             .find(|event| {
-                event["event_type"] == "$create_alias" && event["extra"]["alias"] == "user-1-alias"
+                event["event"] == "$create_alias" && event["extra"]["alias"] == "user-1-alias"
             })
             .expect("missing direct alias event");
         assert!(alias_direct.get("api_key").is_none());
@@ -184,7 +184,7 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
         let batch_alias = events
             .iter()
             .find(|event| {
-                event["event_type"] == "$create_alias"
+                event["event"] == "$create_alias"
                     && event["distinct_id"] == "user-2"
                     && event["extra"]["alias"] == "user-2-alias"
             })
@@ -194,7 +194,7 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
         let batch_identify = events
             .iter()
             .find(|event| {
-                event["event_type"] == "$identify"
+                event["event"] == "$identify"
                     && event["distinct_id"] == "user-2"
                     && event["person_properties"]["email"] == "batch@example.com"
             })

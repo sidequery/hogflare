@@ -36,7 +36,7 @@ async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std
         .expect("expected at least one event in pipeline payload");
 
     assert_eq!(event["source"], "posthog");
-    assert_eq!(event["event_type"], "js-integration-test");
+    assert_eq!(event["event"], "js-integration-test");
     assert_eq!(event["distinct_id"], "js-integration-user");
 
     let properties = event
@@ -85,7 +85,7 @@ async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error:
 
             let event = events
                 .iter()
-                .find(|event| event["event_type"] == "js-integration-test")
+                .find(|event| event["event"] == "js-integration-test")
                 .expect("expected js-integration-test event in pipeline");
 
             assert_eq!(event["distinct_id"], "js-integration-user");
@@ -131,7 +131,7 @@ async fn posthog_js_identify_is_forwarded_to_pipeline() -> Result<(), Box<dyn st
     let events = wait_for_events(&mut pipeline_rx).await?;
     let event = events
         .iter()
-        .find(|e| e["event_type"] == "$identify")
+        .find(|e| e["event"] == "$identify")
         .expect("expected $identify event in pipeline payload");
 
     assert_eq!(event["source"], "posthog");
@@ -176,7 +176,7 @@ async fn posthog_js_group_is_forwarded_to_pipeline() -> Result<(), Box<dyn std::
     let events = wait_for_events(&mut pipeline_rx).await?;
     let event = events
         .iter()
-        .find(|e| e["event_type"] == "$groupidentify")
+        .find(|e| e["event"] == "$groupidentify")
         .expect("expected $groupidentify event in pipeline payload");
 
     assert_eq!(event["source"], "posthog");
@@ -226,7 +226,7 @@ async fn posthog_js_multiple_events_forwarded_to_pipeline() -> Result<(), Box<dy
 
     let event_types: Vec<&str> = all_events
         .iter()
-        .filter_map(|e| e["event_type"].as_str())
+        .filter_map(|e| e["event"].as_str())
         .collect();
 
     assert!(

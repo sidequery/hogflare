@@ -790,11 +790,14 @@ mod tests {
 
         AppState {
             pipeline: Arc::new(pipeline),
+            posthog_team_id: None,
             decide_api_token: None,
             session_recording_endpoint: None,
             signing_secret: None,
             person_store: Arc::new(NoopPersonStore),
             person_debug_token: None,
+            group_store: Arc::new(crate::groups::NoopGroupStore),
+            group_type_map: crate::groups::GroupTypeMap::default(),
         }
     }
 

@@ -10,6 +10,18 @@ CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "10"
 name = "PERSONS"
 class_name = "PersonDurableObject"
 
+[[durable_objects.bindings]]
+name = "PERSON_ID_COUNTER"
+class_name = "PersonIdCounterDurableObject"
+
+[[durable_objects.bindings]]
+name = "GROUPS"
+class_name = "GroupDurableObject"
+
 [[migrations]]
 tag = "v1"
 new_classes = ["PersonDurableObject"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["PersonIdCounterDurableObject", "GroupDurableObject"]

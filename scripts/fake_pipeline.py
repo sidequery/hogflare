@@ -72,6 +72,19 @@ async def health():
     return {"status": "ok"}
 
 
+@app.post("/reset")
+async def reset():
+    async with _TABLE_LOCK:
+        def clear():
+            global _TABLE_INITIALIZED
+            _CONNECTION.execute("DROP TABLE IF EXISTS events")
+            _TABLE_INITIALIZED = False
+
+        await _run_blocking(clear)
+
+    return {"status": "ok"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fake Cloudflare Pipeline server")
     parser.add_argument("--host", default="127.0.0.1")

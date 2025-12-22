@@ -12,6 +12,8 @@ pub struct Config {
     pub pipeline_endpoint: Url,
     pub pipeline_auth_token: Option<String>,
     pub pipeline_timeout: Duration,
+    pub posthog_team_id: Option<i64>,
+    pub posthog_group_types: [Option<String>; 5],
     pub posthog_project_api_key: Option<String>,
     pub session_recording_endpoint: Option<String>,
     pub posthog_signing_secret: Option<String>,
@@ -28,6 +30,8 @@ pub enum ConfigError {
     InvalidEndpoint { value: String, message: String },
     #[error("failed to parse pipeline timeout `{value}`: {message}")]
     InvalidTimeout { value: String, message: String },
+    #[error("failed to parse POSTHOG_TEAM_ID `{value}`: {message}")]
+    InvalidTeamId { value: String, message: String },
 }
 
 impl Config {
@@ -75,6 +79,27 @@ impl Config {
             Err(_) => Duration::from_secs(10),
         };
 
+        let posthog_group_types = [
+            env.var("POSTHOG_GROUP_TYPE_0").ok().map(|v| v.to_string()),
+            env.var("POSTHOG_GROUP_TYPE_1").ok().map(|v| v.to_string()),
+            env.var("POSTHOG_GROUP_TYPE_2").ok().map(|v| v.to_string()),
+            env.var("POSTHOG_GROUP_TYPE_3").ok().map(|v| v.to_string()),
+            env.var("POSTHOG_GROUP_TYPE_4").ok().map(|v| v.to_string()),
+        ];
+
+        let posthog_team_id = match env.var("POSTHOG_TEAM_ID") {
+            Ok(value) => Some(
+                value
+                    .to_string()
+                    .parse::<i64>()
+                    .map_err(|err| ConfigError::InvalidTeamId {
+                        value: value.to_string(),
+                        message: err.to_string(),
+                    })?,
+            ),
+            Err(_) => None,
+        };
+
         let posthog_project_api_key = env.var("POSTHOG_API_KEY").ok().map(|v| v.to_string());
         let session_recording_endpoint = env
             .var("POSTHOG_SESSION_RECORDING_ENDPOINT")
@@ -92,6 +117,8 @@ impl Config {
             pipeline_endpoint,
             pipeline_auth_token,
             pipeline_timeout,
+            posthog_team_id,
+            posthog_group_types,
             posthog_project_api_key,
             session_recording_endpoint,
             posthog_signing_secret,
@@ -140,6 +167,32 @@ impl Config {
             }
         };
 
+        let posthog_group_types = [
+            env::var("POSTHOG_GROUP_TYPE_0").ok(),
+            env::var("POSTHOG_GROUP_TYPE_1").ok(),
+            env::var("POSTHOG_GROUP_TYPE_2").ok(),
+            env::var("POSTHOG_GROUP_TYPE_3").ok(),
+            env::var("POSTHOG_GROUP_TYPE_4").ok(),
+        ];
+
+        let posthog_team_id = match env::var("POSTHOG_TEAM_ID") {
+            Ok(value) => Some(
+                value
+                    .parse::<i64>()
+                    .map_err(|err| ConfigError::InvalidTeamId {
+                        value,
+                        message: err.to_string(),
+                    })?,
+            ),
+            Err(VarError::NotPresent) => None,
+            Err(VarError::NotUnicode(_)) => {
+                return Err(ConfigError::InvalidTeamId {
+                    value: "<invalid-unicode>".to_string(),
+                    message: "value contains invalid unicode".to_string(),
+                })
+            }
+        };
+
         let posthog_project_api_key = env::var("POSTHOG_API_KEY").ok();
         let session_recording_endpoint = env::var("POSTHOG_SESSION_RECORDING_ENDPOINT").ok();
         let posthog_signing_secret = env::var("POSTHOG_SIGNING_SECRET").ok();
@@ -150,6 +203,8 @@ impl Config {
             pipeline_endpoint,
             pipeline_auth_token,
             pipeline_timeout,
+            posthog_team_id,
+            posthog_group_types,
             posthog_project_api_key,
             session_recording_endpoint,
             posthog_signing_secret,

@@ -73,6 +73,9 @@ pub async fn spawn_app_with_options(
             if let Err(err) = hogflare::serve_with_options(
                 listener,
                 pipeline,
+                None,
+                Arc::new(hogflare::groups::NoopGroupStore),
+                hogflare::groups::GroupTypeMap::default(),
                 decide_api_token,
                 session_recording_endpoint,
                 signing_secret,
@@ -133,6 +136,7 @@ pub async fn start_docker_pipeline(
         .arg("compose")
         .arg("up")
         .arg("--build")
+        .arg("--force-recreate")
         .arg("-d")
         .arg("fake-pipeline")
         .status()
@@ -149,6 +153,8 @@ pub async fn start_docker_pipeline(
     for _ in 0..100 {
         if let Ok(response) = client.get(health_url.clone()).send().await {
             if response.status().is_success() {
+                let reset_url = base_url.join("reset")?;
+                let _ = client.post(reset_url).send().await;
                 return Ok((base_url, guard));
             }
         }

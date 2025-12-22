@@ -28,7 +28,7 @@ async fn posthog_node_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn s
     let events = wait_for_events(&mut pipeline_rx).await?;
     let event = events
         .iter()
-        .find(|event| event["event_type"] == "node-integration-test")
+        .find(|event| event["event"] == "node-integration-test")
         .expect("expected node-integration-test event in pipeline payload");
 
     assert_eq!(event["source"], "posthog");
