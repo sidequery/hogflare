@@ -27,7 +27,7 @@ tower-http = { version = "0.5", features = ["trace"] }
 url = "2.5"
 worker = { version = "0.7", features = ["http"] }
 tower-service = "0.3.3"
-uuid = { version = "1.7", features = ["v4", "serde"] }
+uuid = { version = "1.7", features = ["v4", "serde", "js"] }
 getrandom = { version = "0.2", features = ["js"] }
 regex = "1"
 
