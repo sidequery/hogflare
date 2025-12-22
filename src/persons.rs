@@ -96,6 +96,12 @@ pub struct PersonAlias {
     pub alias: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersonSnapshot {
+    pub canonical_id: String,
+    pub record: Option<PersonRecord>,
+}
+
 #[derive(Debug, Error)]
 pub enum PersonError {
     #[error("person update failed: {0}")]
@@ -107,15 +113,18 @@ pub enum PersonError {
     Worker(#[from] worker::Error),
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait PersonStore: Send + Sync {
     async fn apply_update(&self, update: PersonUpdate) -> Result<(), PersonError>;
     async fn apply_alias(&self, alias: PersonAlias) -> Result<(), PersonError>;
+    async fn get_snapshot(&self, distinct_id: &str) -> Result<PersonSnapshot, PersonError>;
 }
 
 pub struct NoopPersonStore;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl PersonStore for NoopPersonStore {
     async fn apply_update(&self, _update: PersonUpdate) -> Result<(), PersonError> {
         Ok(())
@@ -123,6 +132,13 @@ impl PersonStore for NoopPersonStore {
 
     async fn apply_alias(&self, _alias: PersonAlias) -> Result<(), PersonError> {
         Ok(())
+    }
+
+    async fn get_snapshot(&self, distinct_id: &str) -> Result<PersonSnapshot, PersonError> {
+        Ok(PersonSnapshot {
+            canonical_id: distinct_id.to_string(),
+            record: None,
+        })
     }
 }
 
@@ -218,6 +234,7 @@ mod durable {
         durable_object, DurableObject, Env, Headers, Method, ObjectNamespace, Request, RequestInit,
         Response, State,
     };
+    use worker::wasm_bindgen;
     use worker::wasm_bindgen::JsValue;
 
     const RECORD_KEY: &str = "record";
@@ -262,17 +279,17 @@ mod durable {
                     let mut record = self
                         .state
                         .storage()
-                        .get::<_, PersonRecord>(RECORD_KEY)
+                        .get::<PersonRecord>(RECORD_KEY)
                         .await?
                         .unwrap_or_else(|| PersonRecord::new(update.distinct_id.clone()));
                     record.apply_update(&update);
                     self.state.storage().put(RECORD_KEY, record).await?;
-                    Response::ok("ok")
+                    Response::from_json(&serde_json::json!({ "ok": true }))
                 }
                 (Method::Post, "/set_record") => {
                     let record: PersonRecord = req.json().await?;
                     self.state.storage().put(RECORD_KEY, record).await?;
-                    Response::ok("ok")
+                    Response::from_json(&serde_json::json!({ "ok": true }))
                 }
                 (Method::Post, "/redirect") => {
                     let body: RedirectRequest = req.json().await?;
@@ -280,7 +297,7 @@ mod durable {
                         .storage()
                         .put(REDIRECT_KEY, body.redirect_to)
                         .await?;
-                    Response::ok("ok")
+                    Response::from_json(&serde_json::json!({ "ok": true }))
                 }
                 _ => Response::error("not found", 404),
             }
@@ -312,7 +329,7 @@ mod durable {
             let mut init = RequestInit::new();
             init.with_method(method);
 
-            let mut headers = Headers::new();
+            let headers = Headers::new();
             headers
                 .set("content-type", "application/json")
                 .map_err(PersonError::Worker)?;
@@ -328,8 +345,23 @@ mod durable {
                 &init,
             )?;
             let mut response = stub.fetch_with_request(req).await?;
-            let value = response.json::<T>().await?;
-            Ok(value)
+            let status = response.status_code();
+            let body_text = response.text().await.unwrap_or_default();
+            if !(200..300).contains(&status) {
+                let message = format!(
+                    "durable object {path} failed with status {status}: {body_text}"
+                );
+                worker::console_error!("{message}");
+                return Err(PersonError::Message(message));
+            }
+
+            serde_json::from_str(&body_text).map_err(|err| {
+                let message = format!(
+                    "durable object {path} returned invalid json: {err} ({body_text})"
+                );
+                worker::console_error!("{message}");
+                PersonError::Message(message)
+            })
         }
 
         async fn request_empty(
@@ -388,7 +420,7 @@ mod durable {
         }
     }
 
-    #[async_trait]
+    #[async_trait(?Send)]
     impl PersonStore for DurablePersonStore {
         async fn apply_update(&self, update: PersonUpdate) -> Result<(), PersonError> {
             let canonical = self.resolve_id(&update.distinct_id).await?;
@@ -433,6 +465,15 @@ mod durable {
             self.redirect(&alias.distinct_id, &to_id).await?;
 
             Ok(())
+        }
+
+        async fn get_snapshot(&self, distinct_id: &str) -> Result<PersonSnapshot, PersonError> {
+            let canonical = self.resolve_id(distinct_id).await?;
+            let record = self.get_record(&canonical).await?;
+            Ok(PersonSnapshot {
+                canonical_id: canonical,
+                record,
+            })
         }
     }
 

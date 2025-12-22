@@ -15,6 +15,7 @@ pub struct Config {
     pub posthog_project_api_key: Option<String>,
     pub session_recording_endpoint: Option<String>,
     pub posthog_signing_secret: Option<String>,
+    pub person_debug_token: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -84,6 +85,7 @@ impl Config {
             .ok()
             .map(|secret| secret.to_string())
             .or_else(|| env.var("POSTHOG_SIGNING_SECRET").ok().map(|v| v.to_string()));
+        let person_debug_token = env.var("PERSON_DEBUG_TOKEN").ok().map(|v| v.to_string());
 
         Ok(Self {
             address,
@@ -93,6 +95,7 @@ impl Config {
             posthog_project_api_key,
             session_recording_endpoint,
             posthog_signing_secret,
+            person_debug_token,
         })
     }
 
@@ -140,6 +143,7 @@ impl Config {
         let posthog_project_api_key = env::var("POSTHOG_API_KEY").ok();
         let session_recording_endpoint = env::var("POSTHOG_SESSION_RECORDING_ENDPOINT").ok();
         let posthog_signing_secret = env::var("POSTHOG_SIGNING_SECRET").ok();
+        let person_debug_token = env::var("PERSON_DEBUG_TOKEN").ok();
 
         Ok(Self {
             address,
@@ -149,6 +153,7 @@ impl Config {
             posthog_project_api_key,
             session_recording_endpoint,
             posthog_signing_secret,
+            person_debug_token,
         })
     }
 }

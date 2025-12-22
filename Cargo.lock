@@ -508,6 +508,7 @@ dependencies = [
  "sha1",
  "sha2",
  "subtle",
+ "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tower-http 0.5.2",

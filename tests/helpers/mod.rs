@@ -76,6 +76,7 @@ pub async fn spawn_app_with_options(
                 decide_api_token,
                 session_recording_endpoint,
                 signing_secret,
+                None,
             )
             .await
             {

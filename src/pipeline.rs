@@ -86,7 +86,7 @@ impl PipelineClient {
         {
             let body = serde_json::to_string(&events).map_err(PipelineError::Serialize)?;
 
-            let mut headers = Headers::new();
+            let headers = Headers::new();
             headers
                 .set("content-type", "application/json")
                 .map_err(PipelineError::RequestBuild)?;

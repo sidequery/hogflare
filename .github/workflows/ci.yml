@@ -23,6 +23,12 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install worker-build
+        run: cargo install worker-build@^0.7
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
@@ -34,6 +40,9 @@ jobs:
 
       - name: Pre-build fake pipeline image
         run: docker compose build fake-pipeline
+
+      - name: Build worker bundle
+        run: worker-build --release
 
       - name: Run tests
         run: cargo test --all --locked

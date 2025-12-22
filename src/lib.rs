@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use axum::{
     body::Bytes,
-    extract::State,
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
@@ -35,7 +35,9 @@ use persons::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use thiserror::Error;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::info;
 
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::net::TcpListener;
@@ -53,6 +55,7 @@ pub(crate) struct AppState {
     pub(crate) session_recording_endpoint: Option<String>,
     pub(crate) signing_secret: Option<String>,
     pub(crate) person_store: Arc<dyn PersonStore>,
+    pub(crate) person_debug_token: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -151,6 +154,7 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
         config.posthog_project_api_key.clone(),
         config.session_recording_endpoint.clone(),
         config.posthog_signing_secret.clone(),
+        config.person_debug_token.clone(),
     )
     .await
 }
@@ -196,6 +200,7 @@ pub async fn fetch(
         config.posthog_project_api_key.clone(),
         config.session_recording_endpoint.clone(),
         config.posthog_signing_secret.clone(),
+        config.person_debug_token.clone(),
         person_store,
     );
 
@@ -203,7 +208,14 @@ pub async fn fetch(
 }
 
 pub fn build_router(pipeline: Arc<PipelineClient>) -> Router {
-    build_router_with_options(pipeline, None, None, None, Arc::new(NoopPersonStore))
+    build_router_with_options(
+        pipeline,
+        None,
+        None,
+        None,
+        None,
+        Arc::new(NoopPersonStore),
+    )
 }
 
 pub fn build_router_with_options(
@@ -211,6 +223,7 @@ pub fn build_router_with_options(
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
+    person_debug_token: Option<String>,
     person_store: Arc<dyn PersonStore>,
 ) -> Router {
     router(build_state(
@@ -218,6 +231,7 @@ pub fn build_router_with_options(
         decide_api_token,
         session_recording_endpoint,
         signing_secret,
+        person_debug_token,
         person_store,
     ))
 }
@@ -228,6 +242,7 @@ pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Resu
         listener,
         build_state(
             pipeline,
+            None,
             None,
             None,
             None,
@@ -244,12 +259,14 @@ pub async fn serve_with_options(
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
+    person_debug_token: Option<String>,
 ) -> Result<(), RunError> {
     let state = build_state(
         pipeline,
         decide_api_token,
         session_recording_endpoint,
         signing_secret,
+        person_debug_token,
         Arc::new(NoopPersonStore),
     );
     serve_with_state(listener, state).await
@@ -271,6 +288,7 @@ fn router(state: AppState) -> Router {
         .route("/flags/", post(decide))
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
+        .route("/__debug/person/:id", get(debug_person))
         .route("/healthz", get(health))
         .with_state(state);
 
@@ -289,6 +307,7 @@ fn build_state(
     decide_api_token: Option<String>,
     session_recording_endpoint: Option<String>,
     signing_secret: Option<String>,
+    person_debug_token: Option<String>,
     person_store: Arc<dyn PersonStore>,
 ) -> AppState {
     AppState {
@@ -297,6 +316,7 @@ fn build_state(
         session_recording_endpoint,
         signing_secret,
         person_store,
+        person_debug_token,
     }
 }
 
@@ -318,6 +338,7 @@ fn init_tracing() {
 }
 
 #[cfg(target_arch = "wasm32")]
+#[allow(dead_code)]
 fn init_tracing() {}
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
@@ -673,6 +694,38 @@ async fn session_recording(
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn health() -> impl IntoResponse {
     Json(json!({ "status": "ok" }))
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn debug_person(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(distinct_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(expected) = state.person_debug_token.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let provided = headers
+        .get("x-hogflare-debug-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+
+    if provided != Some(expected) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    match state.person_store.get_snapshot(&distinct_id).await {
+        Ok(snapshot) => (StatusCode::OK, Json(snapshot)).into_response(),
+        Err(err) => {
+            error!(error = %err, "failed to load person record");
+            let body = Json(ErrorResponse {
+                status: 0,
+                error: "failed to load person record".to_string(),
+            });
+            (StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+        }
+    }
 }
 
 #[derive(Debug, Error)]
