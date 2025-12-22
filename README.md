@@ -340,7 +340,7 @@ Request fields honored by `/flags` and `/decide`:
 
 #### Bucketing
 
-Rollout bucketing is stable and deterministic:
+Rollout bucketing is deterministic:
 
 - Hash: `sha1("{salt}:{hash_id}")`
 - `hash_id` is `distinct_id` for person flags, or the group key when `group_type` is set
