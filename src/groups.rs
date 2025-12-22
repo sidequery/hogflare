@@ -46,7 +46,7 @@ pub struct GroupSnapshot {
     pub record: Option<GroupRecord>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupUpdate {
     pub group_type: String,
     pub group_key: String,
@@ -126,6 +126,7 @@ impl Default for GroupTypeMap {
 mod durable {
     use super::*;
     use serde::Deserialize;
+    use worker::durable_object;
 
     const RECORD_KEY: &str = "record";
 
@@ -280,4 +281,3 @@ pub use durable::store_from_env;
 
 #[cfg(target_arch = "wasm32")]
 pub use durable::GroupDurableObject;
-

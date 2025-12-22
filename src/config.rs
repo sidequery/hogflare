@@ -116,10 +116,20 @@ impl Config {
             .map(|secret| secret.to_string())
             .or_else(|| env.var("POSTHOG_SIGNING_SECRET").ok().map(|v| v.to_string()));
         let person_debug_token = env.var("PERSON_DEBUG_TOKEN").ok().map(|v| v.to_string());
-        let feature_flags = match env.var("HOGFLARE_FEATURE_FLAGS") {
-            Ok(value) => FeatureFlagStore::from_json(&value)
+        let feature_flags_raw = env
+            .secret("HOGFLARE_FEATURE_FLAGS")
+            .ok()
+            .map(|secret| secret.to_string())
+            .or_else(|| {
+                env.var("HOGFLARE_FEATURE_FLAGS")
+                    .ok()
+                    .map(|var| var.to_string())
+            });
+
+        let feature_flags = match feature_flags_raw {
+            Some(value) => FeatureFlagStore::from_json(&value)
                 .map_err(|err| ConfigError::InvalidFeatureFlags(err.to_string()))?,
-            Err(_) => FeatureFlagStore::empty(),
+            None => FeatureFlagStore::empty(),
         };
 
         Ok(Self {
