@@ -13,41 +13,29 @@ Hogflare is a Cloudflare Workers ingestion layer for PostHog SDKs. It supports P
 
 ## Architecture
 
-```
-+----------------------+
-|     PostHog SDKs     |
-+----------------------+
-  | ingest       | flags/decide
-  v              v
-+----------------------+
-|  Worker (Hogflare)   |
-+----------------------+
-  |\
-  | \-- read/write --> +-----------+
-  |                   | Groups DO |
-  |                   +-----------+
-  |
-  |-- read/write --> +---------------------+
-  |                  | Persons DO          |
-  |                  +---------------------+
-  |                            |
-  |                            v
-  |                  +------------------+
-  |                  | Person ID DO     |
-  |                  | (seq)            |
-  |                  +------------------+
-  |
-  | events
-  v
-+--------------------------+
-| Cloudflare Pipelines     |
-+--------------------------+
-  |
-  v
-+--------------------------+
-| R2 Data Catalog          |
-| (Iceberg/Parquet)        |
-+--------------------------+
+```mermaid
+flowchart TB
+    SDKs["PostHog SDKs"]
+
+    SDKs -->|"ingest"| Worker
+    SDKs -->|"flags/decide"| Worker
+
+    subgraph CF["Cloudflare Workers"]
+        Worker["Hogflare Worker"]
+
+        subgraph DOs["Durable Objects"]
+            PersonsDO["Persons DO"]
+            PersonIdDO["PersonID DO<br/>(seq counter)"]
+            GroupsDO["Groups DO"]
+        end
+
+        Worker <-.->|"read/write"| PersonsDO
+        Worker <-.->|"read/write"| GroupsDO
+        PersonsDO -.-> PersonIdDO
+    end
+
+    Worker -->|"events"| Pipeline["Cloudflare Pipelines"]
+    Pipeline --> R2["R2 Data Catalog<br/>(Iceberg/Parquet)"]
 ```
 
 Notes:
