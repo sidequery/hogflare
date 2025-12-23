@@ -38,10 +38,6 @@ flowchart TB
     Pipeline --> R2["R2 Data Catalog<br/>(Iceberg/Parquet)"]
 ```
 
-Notes:
-- The pipeline never calls DOs. Only the Worker reads/writes Persons + Groups state.
-- Person ID counter is only accessed by the Persons DO.
-
 ## Why?
 
 PostHog is a nice-to-use web & product analytics platform. However, self-hosting PostHog is prohibitively complex so most users seem to rely on the cloud offering. This is an alternative for cost-conscious data folks & businesses interested in a low maintenance way to ingest web & product analytics directly into a managed data lake.
