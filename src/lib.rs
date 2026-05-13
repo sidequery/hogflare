@@ -3,8 +3,8 @@ pub mod extractors;
 pub mod feature_flags;
 pub mod groups;
 pub mod models;
-pub mod pipeline;
 pub mod persons;
+pub mod pipeline;
 
 use std::sync::Arc;
 
@@ -16,33 +16,33 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
-#[cfg(not(target_arch = "wasm32"))]
-use tracing::Level;
+use chrono::Utc;
 use config::{Config, ConfigError};
 use extractors::{
-    header_api_key, header_sent_at, verify_signature, PostHogBatchPayload, PostHogPayload,
-    RequestEnrichment,
+    header_api_key, header_sent_at, verify_signature, ApplyApiKey, PostHogBatchPayload,
+    PostHogPayload, RequestEnrichment,
 };
 use feature_flags::{FeatureFlagContext, FeatureFlagStore};
+use groups::{GroupError, GroupStore, GroupTypeMap, NoopGroupStore};
 use models::{
     AliasRequest, BatchRequest, CaptureRequest, DecideResponse, DecideSessionRecording,
     EngageRequest, ErrorResponse, GroupIdentifyRequest, IdentifyRequest, PostHogResponse,
 };
-use pipeline::{PipelineClient, PipelineError, PipelineEvent};
-use groups::{GroupError, GroupStore, GroupTypeMap, NoopGroupStore};
 use persons::{
     alias_from_request, update_from_capture, update_from_engage, update_from_identify,
     NoopPersonStore, PersonAlias, PersonError, PersonStore, PersonUpdate,
 };
+use pipeline::{PipelineClient, PipelineError, PipelineEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
-use tracing::{error, warn};
+#[cfg(not(target_arch = "wasm32"))]
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 #[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
-use chrono::Utc;
+#[cfg(not(target_arch = "wasm32"))]
+use tracing::Level;
+use tracing::{error, warn};
 
 #[cfg(not(target_arch = "wasm32"))]
 use tokio::net::TcpListener;
@@ -215,8 +215,7 @@ pub async fn fetch(
         }
     };
 
-    let person_store: Arc<dyn PersonStore> =
-        persons::store_from_env(&env, config.posthog_team_id);
+    let person_store: Arc<dyn PersonStore> = persons::store_from_env(&env, config.posthog_team_id);
     let group_store: Arc<dyn GroupStore> = groups::store_from_env(&env);
     let group_type_map = GroupTypeMap::new(config.posthog_group_types.clone());
     let feature_flags = Arc::new(config.feature_flags);
@@ -414,6 +413,24 @@ async fn capture(
     let mut events = Vec::new();
 
     for item in payload.items {
+        if item.event == "$groupidentify" {
+            let group_req = group_identify_from_capture(item)?;
+            let snapshot = state
+                .group_store
+                .apply_update(group_update_from_identify(&group_req))
+                .await?;
+            let (group_slots, group_properties) =
+                group_fields_from_snapshot(&state.group_type_map, snapshot);
+            events.push(
+                PipelineEvent::from_group_identify(group_req)
+                    .with_team_id(state.posthog_team_id)
+                    .with_groups(group_slots, group_properties)
+                    .with_sent_at(sent_at.clone())
+                    .with_enrichment(enrichment),
+            );
+            continue;
+        }
+
         let update = update_from_capture(&item);
         let snapshot = match update {
             Some(update) => apply_person_update(&state, update).await?,
@@ -497,183 +514,187 @@ struct BrowserCaptureRequest {
     #[serde(rename = "$set_once")]
     #[serde(default)]
     set_once: Option<Value>,
+    #[serde(default)]
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, Value>,
+}
+
+impl ApplyApiKey for BrowserCaptureRequest {
+    fn ensure_api_key(&mut self, api_key: &str) {
+        if self.token.is_none() && self.api_key.is_none() {
+            self.api_key = Some(api_key.to_string());
+        }
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn browser_capture(
     State(state): State<AppState>,
     enrichment: RequestEnrichment,
-    headers: HeaderMap,
-    body: Bytes,
+    payload: PostHogPayload<BrowserCaptureRequest>,
 ) -> Result<Json<PostHogResponse>, AppError> {
-    let sent_at = header_sent_at(&headers);
+    let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
+    let mut events = Vec::new();
 
-    let payload: BrowserCaptureRequest =
-        serde_json::from_slice(&body).map_err(|e| AppError::InvalidPayload(e.to_string()))?;
+    for payload in payload.items {
+        let api_key = payload.token.clone().or(payload.api_key.clone());
 
-    let api_key = payload.token.or(payload.api_key).or_else(|| header_api_key(&headers));
+        let distinct_id = browser_distinct_id(&payload)
+            .ok_or_else(|| AppError::InvalidPayload("missing distinct_id".into()))?;
 
-    // Extract distinct_id from payload or properties
-    let distinct_id = payload.distinct_id.clone().or_else(|| {
-        payload.properties.as_ref().and_then(|props| {
-            props
-                .get("$distinct_id")
-                .or_else(|| props.get("distinct_id"))
-                .and_then(Value::as_str)
-                .map(String::from)
-        })
-    });
-
-    let distinct_id =
-        distinct_id.ok_or_else(|| AppError::InvalidPayload("missing distinct_id".into()))?;
-
-    // Handle $identify events specially - use top-level $set as person_properties
-    let event = if payload.event == "$identify" {
-        let mut extra = std::collections::HashMap::new();
-        if let Some(set_once) = payload.set_once.clone() {
-            extra.insert("$set_once".to_string(), set_once);
-        }
-
-        let identify_req = IdentifyRequest {
-            api_key,
-            distinct_id,
-            anon_distinct_id: None,
-            properties: payload.set.clone(),
-            timestamp: payload.timestamp,
-            context: None,
-            extra,
-        };
-        PipelineEvent::from_identify(identify_req)
-    } else if payload.event == "$groupidentify" {
-        // Handle group identify - extract group_type and group_key from $set
-        let props = payload.properties.as_ref();
-        let group_type = props
-            .and_then(|p| p.get("$group_type").and_then(Value::as_str))
-            .unwrap_or("unknown")
-            .to_string();
-        let group_key = props
-            .and_then(|p| p.get("$group_key").and_then(Value::as_str))
-            .unwrap_or("unknown")
-            .to_string();
-        let group_properties = props.and_then(|p| p.get("$group_set").cloned());
-
-        let group_req = GroupIdentifyRequest {
-            api_key,
-            group_type,
-            group_key,
-            properties: group_properties,
-            timestamp: payload.timestamp,
-            extra: std::collections::HashMap::new(),
-        };
-        PipelineEvent::from_group_identify(group_req)
-    } else {
-        let capture_req = CaptureRequest {
-            api_key,
-            event: payload.event,
-            distinct_id,
-            properties: payload.properties,
-            timestamp: payload.timestamp,
-            context: None,
-            extra: std::collections::HashMap::new(),
-        };
-        PipelineEvent::from_capture(capture_req)
-    };
-
-    let mut group_slots = [None, None, None, None, None];
-    let mut group_properties = None;
-
-    if event.event == "$groupidentify" {
-        if let Some(group_type) = event.extra.get("group_type").and_then(Value::as_str) {
-            if let Some(group_key) = event.extra.get("group_key").and_then(Value::as_str) {
-                if let Some(index) = state.group_type_map.index_for(group_type) {
-                    group_slots[index] = Some(group_key.to_string());
-                }
-                let snapshot = state.group_store.get_snapshot(group_type, group_key).await?;
-                if let Some(record) = snapshot.record {
-                    let mut props = serde_json::Map::new();
-                    props.insert(record.group_type.clone(), Value::Object(record.properties));
-                    group_properties = Some(Value::Object(props));
+        let event = if payload.event == "$identify" {
+            let identify_req = browser_identify_request(payload, api_key, distinct_id);
+            if let Some(anon) = identify_req
+                .anon_distinct_id
+                .clone()
+                .or_else(|| {
+                    identify_req
+                        .properties
+                        .as_ref()
+                        .and_then(Value::as_object)
+                        .and_then(|props| props.get("$anon_distinct_id"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .or_else(|| {
+                    identify_req
+                        .extra
+                        .get("$anon_distinct_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+            {
+                if anon != identify_req.distinct_id {
+                    state
+                        .person_store
+                        .apply_alias(PersonAlias {
+                            distinct_id: identify_req.distinct_id.clone(),
+                            alias: anon,
+                        })
+                        .await?;
                 }
             }
-        }
-    } else {
-        let groups = extract_groups(&event.properties);
-        let group_set = if let Some(Value::Object(props)) = event.properties.as_ref() {
-            extract_group_set(props.get("$group_set"))
+            PipelineEvent::from_identify(identify_req)
+        } else if payload.event == "$groupidentify" {
+            let group_req = browser_group_identify_request(payload, api_key)?;
+            let group_update = group_update_from_identify(&group_req);
+            state.group_store.apply_update(group_update).await?;
+            PipelineEvent::from_group_identify(group_req)
         } else {
-            serde_json::Map::new()
+            let capture_req = CaptureRequest {
+                api_key,
+                event: payload.event,
+                distinct_id,
+                properties: payload.properties,
+                timestamp: payload.timestamp,
+                context: None,
+                extra: payload.extra,
+            };
+            PipelineEvent::from_capture(capture_req)
         };
 
-        if let Some(groups_map) = groups.as_ref() {
-            for (group_type, props) in &group_set {
-                let Some(group_key) = groups_map.get(group_type).and_then(Value::as_str) else {
-                    continue;
-                };
-                let Some(props_map) = props.as_object() else {
-                    continue;
-                };
-                if props_map.is_empty() {
-                    continue;
-                }
-                state
-                    .group_store
-                    .apply_update(groups::GroupUpdate {
-                        group_type: group_type.clone(),
-                        group_key: group_key.to_string(),
-                        properties: props_map.clone(),
-                    })
-                    .await?;
-            }
+        let mut group_slots = [None, None, None, None, None];
+        let mut group_properties = None;
 
-            group_slots = group_slots_from_map(&state.group_type_map, groups_map);
-            group_properties = hydrate_group_properties(&state, groups_map).await?;
+        if event.event == "$groupidentify" {
+            if let Some(group_type) = event.extra.get("group_type").and_then(Value::as_str) {
+                if let Some(group_key) = event.extra.get("group_key").and_then(Value::as_str) {
+                    if let Some(index) = state.group_type_map.index_for(group_type) {
+                        group_slots[index] = Some(group_key.to_string());
+                    }
+                    let snapshot = state
+                        .group_store
+                        .get_snapshot(group_type, group_key)
+                        .await?;
+                    if let Some(record) = snapshot.record {
+                        let mut props = serde_json::Map::new();
+                        props.insert(record.group_type.clone(), Value::Object(record.properties));
+                        group_properties = Some(Value::Object(props));
+                    }
+                }
+            }
+        } else {
+            let groups = extract_groups(&event.properties);
+            let group_set = if let Some(Value::Object(props)) = event.properties.as_ref() {
+                extract_group_set(props.get("$group_set"))
+            } else {
+                serde_json::Map::new()
+            };
+
+            if let Some(groups_map) = groups.as_ref() {
+                for (group_type, props) in &group_set {
+                    let Some(group_key) = groups_map.get(group_type).and_then(Value::as_str) else {
+                        continue;
+                    };
+                    let Some(props_map) = props.as_object() else {
+                        continue;
+                    };
+                    if props_map.is_empty() {
+                        continue;
+                    }
+                    state
+                        .group_store
+                        .apply_update(groups::GroupUpdate {
+                            group_type: group_type.clone(),
+                            group_key: group_key.to_string(),
+                            properties: props_map.clone(),
+                        })
+                        .await?;
+                }
+
+                group_slots = group_slots_from_map(&state.group_type_map, groups_map);
+                group_properties = hydrate_group_properties(&state, groups_map).await?;
+            }
         }
+
+        let snapshot = if event.event == "$groupidentify" {
+            None
+        } else {
+            let update = if event.event == "$identify" {
+                update_from_identify(&IdentifyRequest {
+                    api_key: event.api_key.clone(),
+                    distinct_id: event.distinct_id.clone(),
+                    anon_distinct_id: None,
+                    properties: event.person_properties.clone(),
+                    timestamp: event.timestamp,
+                    context: None,
+                    extra: event.extra.clone(),
+                })
+            } else {
+                update_from_capture(&CaptureRequest {
+                    api_key: event.api_key.clone(),
+                    event: event.event.clone(),
+                    distinct_id: event.distinct_id.clone(),
+                    properties: event.properties.clone(),
+                    timestamp: event.timestamp,
+                    context: None,
+                    extra: event.extra.clone(),
+                })
+            };
+
+            Some(match update {
+                Some(update) => apply_person_update(&state, update).await?,
+                None => ensure_person_snapshot(&state, &event.distinct_id).await?,
+            })
+        };
+
+        let (person_id, person_created_at, person_properties) = snapshot
+            .as_ref()
+            .map(person_fields)
+            .unwrap_or((None, None, None));
+
+        events.push(
+            event
+                .with_team_id(state.posthog_team_id)
+                .with_person(person_id, person_created_at, person_properties)
+                .with_groups(group_slots, group_properties)
+                .with_sent_at(sent_at.clone())
+                .with_enrichment(enrichment),
+        );
     }
 
-    let snapshot = if event.event == "$groupidentify" {
-        None
-    } else {
-        let update = if event.event == "$identify" {
-            update_from_identify(&IdentifyRequest {
-                api_key: event.api_key.clone(),
-                distinct_id: event.distinct_id.clone(),
-                anon_distinct_id: None,
-                properties: event.person_properties.clone(),
-                timestamp: event.timestamp,
-                context: None,
-                extra: event.extra.clone(),
-            })
-        } else {
-            update_from_capture(&CaptureRequest {
-                api_key: event.api_key.clone(),
-                event: event.event.clone(),
-                distinct_id: event.distinct_id.clone(),
-                properties: event.properties.clone(),
-                timestamp: event.timestamp,
-                context: None,
-                extra: event.extra.clone(),
-            })
-        };
-
-        Some(match update {
-            Some(update) => apply_person_update(&state, update).await?,
-            None => ensure_person_snapshot(&state, &event.distinct_id).await?,
-        })
-    };
-
-    let (person_id, person_created_at, person_properties) = snapshot
-        .as_ref()
-        .map(person_fields)
-        .unwrap_or((None, None, None));
-
-    let event = event
-        .with_team_id(state.posthog_team_id)
-        .with_person(person_id, person_created_at, person_properties)
-        .with_groups(group_slots, group_properties)
-        .with_sent_at(sent_at)
-        .with_enrichment(enrichment);
-    state.pipeline.send(vec![event]).await?;
+    state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
 
@@ -758,8 +779,7 @@ async fn batch(
     let sent_at = payload.batch.sent_at.clone();
     let shared_api_key = payload.batch.api_key.clone();
     let enrichment = enrichment.properties();
-    let items = convert_batch(payload.batch, shared_api_key)
-        .map_err(AppError::InvalidPayload)?;
+    let items = convert_batch(payload.batch, shared_api_key).map_err(AppError::InvalidPayload)?;
 
     let mut events = Vec::new();
 
@@ -780,16 +800,8 @@ async fn batch(
 
         if let Some(group_update) = item.group_update {
             let snapshot = state.group_store.apply_update(group_update).await?;
-            let mut group_slots = [None, None, None, None, None];
-            let mut group_properties = None;
-            if let Some(record) = snapshot.record {
-                if let Some(index) = state.group_type_map.index_for(&record.group_type) {
-                    group_slots[index] = Some(record.group_key.clone());
-                }
-                let mut props = serde_json::Map::new();
-                props.insert(record.group_type.clone(), Value::Object(record.properties));
-                group_properties = Some(Value::Object(props));
-            }
+            let (group_slots, group_properties) =
+                group_fields_from_snapshot(&state.group_type_map, snapshot);
 
             let event = item
                 .event
@@ -877,35 +889,13 @@ async fn groups(
     let mut events = Vec::new();
 
     for item in payload.items {
-        let group_update = item
-            .properties
-            .as_ref()
-            .and_then(|value| value.as_object())
-            .map(|props| groups::GroupUpdate {
-                group_type: item.group_type.clone(),
-                group_key: item.group_key.clone(),
-                properties: props.clone(),
-            });
-
-        let snapshot = if let Some(update) = group_update {
-            state.group_store.apply_update(update).await?
-        } else {
-            state
-                .group_store
-                .get_snapshot(&item.group_type, &item.group_key)
-                .await?
-        };
-
-        let mut group_slots = [None, None, None, None, None];
-        let mut group_properties = None;
-        if let Some(record) = snapshot.record {
-            if let Some(index) = state.group_type_map.index_for(&record.group_type) {
-                group_slots[index] = Some(record.group_key.clone());
-            }
-            let mut props = serde_json::Map::new();
-            props.insert(record.group_type.clone(), Value::Object(record.properties));
-            group_properties = Some(Value::Object(props));
-        }
+        let item = normalize_group_identify_request(item)?;
+        let snapshot = state
+            .group_store
+            .apply_update(group_update_from_identify(&item))
+            .await?;
+        let (group_slots, group_properties) =
+            group_fields_from_snapshot(&state.group_type_map, snapshot);
 
         events.push(
             PipelineEvent::from_group_identify(item)
@@ -1033,13 +1023,24 @@ struct DecideRequest {
     #[serde(default)]
     person_properties: Option<std::collections::HashMap<String, Value>>,
     #[serde(default, rename = "group_properties")]
-    group_properties: Option<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
+    group_properties:
+        Option<std::collections::HashMap<String, std::collections::HashMap<String, Value>>>,
     #[serde(default)]
     disable_flags: Option<bool>,
     #[serde(default)]
     flag_keys_to_evaluate: Option<Vec<String>>,
     #[serde(default)]
     evaluation_environments: Option<Vec<String>>,
+    #[serde(default)]
+    evaluation_contexts: Option<Vec<String>>,
+}
+
+impl ApplyApiKey for DecideRequest {
+    fn ensure_api_key(&mut self, api_key: &str) {
+        if self.api_key.is_none() && self.token.is_none() {
+            self.api_key = Some(api_key.to_string());
+        }
+    }
 }
 
 #[derive(Default, Deserialize)]
@@ -1053,20 +1054,15 @@ struct FlagsQuery {
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn decide(
     State(state): State<AppState>,
-    headers: HeaderMap,
     axum::extract::Query(query): axum::extract::Query<FlagsQuery>,
-    Json(payload): Json<DecideRequest>,
+    payload: PostHogPayload<DecideRequest>,
 ) -> Result<Json<DecideResponse>, AppError> {
-    let header_key = headers
-        .get("x-posthog-api-key")
-        .and_then(|value| value.to_str().ok())
-        .map(|value| value.to_string());
+    let payload = payload.items.into_iter().next().unwrap_or_default();
 
     let api_key = payload
         .api_key
         .clone()
         .or(payload.token.clone())
-        .or(header_key)
         .or(state.decide_api_token.clone());
 
     let version = query.v.unwrap_or(2);
@@ -1110,8 +1106,9 @@ struct FlagsResponse {
 async fn flags(
     State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<FlagsQuery>,
-    Json(payload): Json<DecideRequest>,
+    payload: PostHogPayload<DecideRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let payload = payload.items.into_iter().next().unwrap_or_default();
     let version = query.v.unwrap_or(2);
     let flags = evaluate_feature_flags(&state, &payload).await?;
     let (feature_flags, feature_flag_payloads) = flags.to_maps(version);
@@ -1257,7 +1254,11 @@ async fn apply_person_update(
     update: PersonUpdate,
 ) -> Result<persons::PersonSnapshot, AppError> {
     if update.is_empty() {
-        return state.person_store.ensure_person(&update.distinct_id).await.map_err(Into::into);
+        return state
+            .person_store
+            .ensure_person(&update.distinct_id)
+            .await
+            .map_err(Into::into);
     }
     Ok(state.person_store.apply_update(update).await?)
 }
@@ -1306,15 +1307,25 @@ async fn evaluate_feature_flags(
             person_properties.insert(key.clone(), value.clone());
         }
     }
+    person_properties
+        .entry("distinct_id".to_string())
+        .or_insert_with(|| Value::String(distinct_id.clone()));
 
     let groups = payload.groups.clone().unwrap_or_default();
     let mut group_properties: std::collections::HashMap<String, serde_json::Map<String, Value>> =
         std::collections::HashMap::new();
 
     for (group_type, group_key) in &groups {
-        let snapshot = state.group_store.get_snapshot(group_type, group_key).await?;
+        let snapshot = state
+            .group_store
+            .get_snapshot(group_type, group_key)
+            .await?;
         if let Some(record) = snapshot.record {
-            group_properties.insert(group_type.clone(), record.properties);
+            let mut props = record.properties;
+            props
+                .entry("$group_key".to_string())
+                .or_insert_with(|| Value::String(group_key.clone()));
+            group_properties.insert(group_type.clone(), props);
         }
     }
 
@@ -1322,7 +1333,15 @@ async fn evaluate_feature_flags(
         for (group_type, props) in overrides {
             let converted: serde_json::Map<String, Value> =
                 props.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-            group_properties.insert(group_type.clone(), converted);
+            let merged = group_properties.entry(group_type.clone()).or_default();
+            for (key, value) in converted {
+                merged.insert(key, value);
+            }
+            if let Some(group_key) = groups.get(group_type) {
+                merged
+                    .entry("$group_key".to_string())
+                    .or_insert_with(|| Value::String(group_key.clone()));
+            }
         }
     }
 
@@ -1340,13 +1359,20 @@ async fn evaluate_feature_flags(
     if let Some(envs) = payload.evaluation_environments.as_ref() {
         options.evaluation_environments = Some(envs.iter().cloned().collect());
     }
+    if let Some(contexts) = payload.evaluation_contexts.as_ref() {
+        options.evaluation_environments = Some(contexts.iter().cloned().collect());
+    }
 
     Ok(state.feature_flags.evaluate_with(&ctx, &options))
 }
 
 fn person_fields(
     snapshot: &persons::PersonSnapshot,
-) -> (Option<String>, Option<chrono::DateTime<chrono::Utc>>, Option<Value>) {
+) -> (
+    Option<String>,
+    Option<chrono::DateTime<chrono::Utc>>,
+    Option<Value>,
+) {
     match &snapshot.record {
         Some(record) => (
             Some(record.uuid.clone()),
@@ -1361,6 +1387,177 @@ fn extract_groups(properties: &Option<Value>) -> Option<serde_json::Map<String, 
     let props = properties.as_ref()?.as_object()?;
     let groups = props.get("$groups")?.as_object()?;
     Some(groups.clone())
+}
+
+fn browser_distinct_id(payload: &BrowserCaptureRequest) -> Option<String> {
+    payload.distinct_id.clone().or_else(|| {
+        payload.properties.as_ref().and_then(|props| {
+            props
+                .get("$distinct_id")
+                .or_else(|| props.get("distinct_id"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        })
+    })
+}
+
+fn browser_identify_request(
+    payload: BrowserCaptureRequest,
+    api_key: Option<String>,
+    distinct_id: String,
+) -> IdentifyRequest {
+    let mut extra = payload.extra;
+    let properties_obj = payload.properties.as_ref().and_then(Value::as_object);
+
+    let set = payload.set.or_else(|| {
+        properties_obj
+            .and_then(|props| props.get("$set"))
+            .cloned()
+            .or(payload.properties.clone())
+    });
+
+    if let Some(set_once) = payload.set_once.or_else(|| {
+        properties_obj
+            .and_then(|props| props.get("$set_once"))
+            .cloned()
+    }) {
+        extra.insert("$set_once".to_string(), set_once);
+    }
+
+    let anon_distinct_id = properties_obj
+        .and_then(|props| props.get("$anon_distinct_id"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            extra
+                .get("$anon_distinct_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+
+    IdentifyRequest {
+        api_key,
+        distinct_id,
+        anon_distinct_id,
+        properties: set,
+        timestamp: payload.timestamp,
+        context: None,
+        extra,
+    }
+}
+
+fn browser_group_identify_request(
+    payload: BrowserCaptureRequest,
+    api_key: Option<String>,
+) -> Result<GroupIdentifyRequest, AppError> {
+    group_identify_from_parts(
+        api_key,
+        payload.properties,
+        payload.timestamp,
+        payload.extra,
+    )
+}
+
+fn group_identify_from_capture(payload: CaptureRequest) -> Result<GroupIdentifyRequest, AppError> {
+    group_identify_from_parts(
+        payload.api_key,
+        payload.properties,
+        payload.timestamp,
+        payload.extra,
+    )
+}
+
+fn group_identify_from_parts(
+    api_key: Option<String>,
+    properties: Option<Value>,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    extra: std::collections::HashMap<String, Value>,
+) -> Result<GroupIdentifyRequest, AppError> {
+    let props = properties
+        .as_ref()
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::InvalidPayload("missing group identify properties".to_string()))?;
+
+    let group_type = props
+        .get("$group_type")
+        .or_else(|| props.get("group_type"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::InvalidPayload("missing $group_type".to_string()))?
+        .to_string();
+    let group_key = props
+        .get("$group_key")
+        .or_else(|| props.get("group_key"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::InvalidPayload("missing $group_key".to_string()))?
+        .to_string();
+    let group_properties = props
+        .get("$group_set")
+        .or_else(|| props.get("properties"))
+        .cloned()
+        .or_else(|| Some(Value::Object(serde_json::Map::new())));
+
+    Ok(GroupIdentifyRequest {
+        api_key,
+        group_type,
+        group_key,
+        properties: group_properties,
+        timestamp,
+        extra,
+    })
+}
+
+fn normalize_group_identify_request(
+    request: GroupIdentifyRequest,
+) -> Result<GroupIdentifyRequest, AppError> {
+    if !request.group_type.is_empty() && !request.group_key.is_empty() {
+        return Ok(request);
+    }
+
+    group_identify_from_parts(
+        request.api_key,
+        request.properties,
+        request.timestamp,
+        request.extra,
+    )
+}
+
+fn group_update_from_identify(request: &GroupIdentifyRequest) -> groups::GroupUpdate {
+    let properties = request
+        .properties
+        .as_ref()
+        .and_then(Value::as_object)
+        .map(|props| {
+            props
+                .get("$group_set")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_else(|| props.clone())
+        })
+        .unwrap_or_default();
+
+    groups::GroupUpdate {
+        group_type: request.group_type.clone(),
+        group_key: request.group_key.clone(),
+        properties,
+    }
+}
+
+fn group_fields_from_snapshot(
+    group_type_map: &GroupTypeMap,
+    snapshot: groups::GroupSnapshot,
+) -> ([Option<String>; 5], Option<Value>) {
+    let mut group_slots = [None, None, None, None, None];
+    let mut group_properties = None;
+    if let Some(record) = snapshot.record {
+        if let Some(index) = group_type_map.index_for(&record.group_type) {
+            group_slots[index] = Some(record.group_key.clone());
+        }
+        let mut props = serde_json::Map::new();
+        props.insert(record.group_type.clone(), Value::Object(record.properties));
+        group_properties = Some(Value::Object(props));
+    }
+
+    (group_slots, group_properties)
 }
 
 fn extract_group_set(value: Option<&Value>) -> serde_json::Map<String, Value> {
@@ -1396,8 +1593,13 @@ async fn hydrate_group_properties(
 ) -> Result<Option<Value>, AppError> {
     let mut props = serde_json::Map::new();
     for (group_type, value) in groups {
-        let Some(group_key) = value.as_str() else { continue };
-        let snapshot = state.group_store.get_snapshot(group_type, group_key).await?;
+        let Some(group_key) = value.as_str() else {
+            continue;
+        };
+        let snapshot = state
+            .group_store
+            .get_snapshot(group_type, group_key)
+            .await?;
         if let Some(record) = snapshot.record {
             props.insert(group_type.clone(), Value::Object(record.properties));
         }
@@ -1442,6 +1644,96 @@ fn convert_batch(
     }
 
     Ok(items)
+}
+
+fn normalize_capture_value(mut value: Value) -> Result<Value, String> {
+    let map = value
+        .as_object_mut()
+        .ok_or_else(|| "expected JSON object in batch payload".to_string())?;
+    if map.get("distinct_id").is_none() {
+        if let Some(distinct_id) = map
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|props| {
+                props
+                    .get("distinct_id")
+                    .or_else(|| props.get("$distinct_id"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_string)
+        {
+            map.insert("distinct_id".to_string(), Value::String(distinct_id));
+        }
+    }
+    Ok(value)
+}
+
+fn normalize_alias_value(mut value: Value) -> Result<Value, String> {
+    let map = value
+        .as_object_mut()
+        .ok_or_else(|| "expected JSON object in batch alias payload".to_string())?;
+    if map.get("alias").is_none() {
+        if let Some(alias) = map
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|props| props.get("alias").and_then(Value::as_str))
+            .map(str::to_string)
+        {
+            map.insert("alias".to_string(), Value::String(alias));
+        }
+    }
+    Ok(value)
+}
+
+fn normalize_group_identify_value(mut value: Value) -> Result<Value, String> {
+    let map = value
+        .as_object_mut()
+        .ok_or_else(|| "expected JSON object in batch group identify payload".to_string())?;
+    let props = map.get("properties").and_then(Value::as_object).cloned();
+
+    if map.get("group_type").is_none() {
+        if let Some(group_type) = props
+            .as_ref()
+            .and_then(|props| {
+                props
+                    .get("$group_type")
+                    .or_else(|| props.get("group_type"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_string)
+        {
+            map.insert("group_type".to_string(), Value::String(group_type));
+        }
+    }
+
+    if map.get("group_key").is_none() {
+        if let Some(group_key) = props
+            .as_ref()
+            .and_then(|props| {
+                props
+                    .get("$group_key")
+                    .or_else(|| props.get("group_key"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_string)
+        {
+            map.insert("group_key".to_string(), Value::String(group_key));
+        }
+    }
+
+    if let Some(group_set) = props
+        .as_ref()
+        .and_then(|props| props.get("$group_set").cloned())
+    {
+        map.insert("properties".to_string(), group_set);
+    } else if map.get("properties").is_none() {
+        map.insert(
+            "properties".to_string(),
+            Value::Object(serde_json::Map::new()),
+        );
+    }
+
+    Ok(value)
 }
 
 fn convert_batch_item(
@@ -1498,17 +1790,10 @@ fn convert_batch_item(
         || matches!(type_field.as_deref(), Some("group_identify"))
         || matches!(event_field.as_deref(), Some("$groupidentify"))
     {
+        let value = normalize_group_identify_value(value)?;
         return serde_json::from_value::<GroupIdentifyRequest>(value)
             .map(|request| {
-                let group_update = request
-                    .properties
-                    .as_ref()
-                    .and_then(|value| value.as_object())
-                    .map(|props| groups::GroupUpdate {
-                        group_type: request.group_type.clone(),
-                        group_key: request.group_key.clone(),
-                        properties: props.clone(),
-                    });
+                let group_update = Some(group_update_from_identify(&request));
                 BatchItem {
                     kind: BatchItemKind::GroupIdentify,
                     event: PipelineEvent::from_group_identify(request),
@@ -1527,6 +1812,7 @@ fn convert_batch_item(
         || matches!(event_field.as_deref(), Some("$create_alias"))
         || has_alias_fields
     {
+        let value = normalize_alias_value(value)?;
         return serde_json::from_value::<AliasRequest>(value)
             .map(|request| {
                 let alias = alias_from_request(&request);
@@ -1568,6 +1854,7 @@ fn convert_batch_item(
             .map_err(|err| format!("invalid engage event: {err}"));
     }
 
+    let value = normalize_capture_value(value)?;
     serde_json::from_value::<CaptureRequest>(value)
         .map(|request| {
             let update = update_from_capture(&request);

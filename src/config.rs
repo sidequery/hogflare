@@ -3,8 +3,8 @@ use std::{net::SocketAddr, time::Duration};
 #[cfg(not(target_arch = "wasm32"))]
 use std::env::{self, VarError};
 
-use url::Url;
 use thiserror::Error;
+use url::Url;
 
 use crate::feature_flags::FeatureFlagStore;
 
@@ -42,9 +42,7 @@ pub enum ConfigError {
 impl Config {
     #[cfg(target_arch = "wasm32")]
     pub fn from_worker_env(env: &worker::Env) -> Result<Self, ConfigError> {
-        let address: SocketAddr = "0.0.0.0:8080"
-            .parse::<SocketAddr>()
-            .map_err(|err| {
+        let address: SocketAddr = "0.0.0.0:8080".parse::<SocketAddr>().map_err(|err| {
             ConfigError::InvalidSocketAddress {
                 value: "0.0.0.0:8080".to_string(),
                 message: err.to_string(),
@@ -93,15 +91,12 @@ impl Config {
         ];
 
         let posthog_team_id = match env.var("POSTHOG_TEAM_ID") {
-            Ok(value) => Some(
-                value
-                    .to_string()
-                    .parse::<i64>()
-                    .map_err(|err| ConfigError::InvalidTeamId {
-                        value: value.to_string(),
-                        message: err.to_string(),
-                    })?,
-            ),
+            Ok(value) => Some(value.to_string().parse::<i64>().map_err(|err| {
+                ConfigError::InvalidTeamId {
+                    value: value.to_string(),
+                    message: err.to_string(),
+                }
+            })?),
             Err(_) => None,
         };
 
@@ -114,7 +109,11 @@ impl Config {
             .secret("POSTHOG_SIGNING_SECRET")
             .ok()
             .map(|secret| secret.to_string())
-            .or_else(|| env.var("POSTHOG_SIGNING_SECRET").ok().map(|v| v.to_string()));
+            .or_else(|| {
+                env.var("POSTHOG_SIGNING_SECRET")
+                    .ok()
+                    .map(|v| v.to_string())
+            });
         let person_debug_token = env.var("PERSON_DEBUG_TOKEN").ok().map(|v| v.to_string());
         let feature_flags_raw = env
             .secret("HOGFLARE_FEATURE_FLAGS")

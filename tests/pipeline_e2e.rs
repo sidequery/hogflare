@@ -135,7 +135,7 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
             events
                 .iter()
                 .find(|event| {
-                event["event"] == event_type
+                    event["event"] == event_type
                         && distinct_id.map_or(true, |id| event["distinct_id"] == id)
                 })
                 .unwrap_or_else(|| {

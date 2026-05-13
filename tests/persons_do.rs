@@ -27,11 +27,8 @@ async fn durable_object_person_updates_apply() -> Result<(), Box<dyn std::error:
     let temp_dir = TempDir::new()?;
     let debug_token = "debug-test-token";
 
-    let config_path = write_wrangler_config(
-        temp_dir.path(),
-        &pipeline_endpoint.to_string(),
-        debug_token,
-    )?;
+    let config_path =
+        write_wrangler_config(temp_dir.path(), &pipeline_endpoint.to_string(), debug_token)?;
     patch_worker_bundle()?;
 
     let mut wrangler = spawn_wrangler_dev(&config_path, port)?;
@@ -134,7 +131,7 @@ class_name = "PersonIdCounterDurableObject"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["PersonDurableObject", "PersonIdCounterDurableObject"]
+new_sqlite_classes = ["PersonDurableObject", "PersonIdCounterDurableObject"]
 "#,
         main = main_path.display(),
         pipeline = pipeline_endpoint,
@@ -154,11 +151,7 @@ fn patch_worker_bundle() -> Result<(), Box<dyn std::error::Error>> {
     }
     let contents = fs::read_to_string(&bundle_path)?;
     let patched = if contents.starts_with("import source wasmModule") {
-        contents.replacen(
-            "import source wasmModule from",
-            "import wasmModule from",
-            1,
-        )
+        contents.replacen("import source wasmModule from", "import wasmModule from", 1)
     } else {
         contents
     };
@@ -173,7 +166,10 @@ export * from "./index.mjs";
     Ok(())
 }
 
-fn spawn_wrangler_dev(config_path: &PathBuf, port: u16) -> Result<Child, Box<dyn std::error::Error>> {
+fn spawn_wrangler_dev(
+    config_path: &PathBuf,
+    port: u16,
+) -> Result<Child, Box<dyn std::error::Error>> {
     let child = Command::new("bunx")
         .arg("wrangler")
         .arg("dev")
@@ -230,9 +226,7 @@ async fn fetch_person(
     Ok(payload)
 }
 
-async fn cleanup_pipeline(
-    pipeline_handle: tokio::task::JoinHandle<()>,
-) {
+async fn cleanup_pipeline(pipeline_handle: tokio::task::JoinHandle<()>) {
     pipeline_handle.abort();
     let _ = pipeline_handle.await;
 }

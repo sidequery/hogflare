@@ -104,7 +104,9 @@ pub struct EngageRequest {
 pub struct GroupIdentifyRequest {
     #[serde(default)]
     pub api_key: Option<String>,
+    #[serde(default)]
     pub group_type: String,
+    #[serde(default)]
     pub group_key: String,
     #[serde(default)]
     pub properties: Option<Value>,
@@ -124,7 +126,7 @@ pub struct DecideResponse {
     pub feature_flag_payloads: HashMap<String, Value>,
     pub config: DecideConfig,
     #[serde(rename = "errorsWhileComputingFlags")]
-    pub errors_while_computing_flags: Vec<Value>,
+    pub errors_while_computing_flags: bool,
     #[serde(rename = "sessionRecording")]
     pub session_recording: DecideSessionRecording,
     #[serde(rename = "supportedCompression")]
@@ -138,7 +140,7 @@ impl Default for DecideResponse {
             feature_flags: HashMap::new(),
             feature_flag_payloads: HashMap::new(),
             config: DecideConfig::default(),
-            errors_while_computing_flags: Vec::new(),
+            errors_while_computing_flags: false,
             session_recording: DecideSessionRecording::default(),
             supported_compression: vec!["gzip".to_string(), "gzip-js".to_string()],
         }

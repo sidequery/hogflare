@@ -6,7 +6,7 @@
   "license": "MIT",
   "dependencies": {
     "jsdom": "^24.0.0",
-    "posthog-js": "^1.200.0",
-    "posthog-node": "^5.17.4"
+    "posthog-js": "^1.373.4",
+    "posthog-node": "^5.34.1"
   }
 }

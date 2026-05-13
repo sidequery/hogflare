@@ -122,11 +122,11 @@ class_name = "GroupDurableObject"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["PersonDurableObject"]
+new_sqlite_classes = ["PersonDurableObject"]
 
 [[migrations]]
 tag = "v2"
-new_classes = ["PersonIdCounterDurableObject", "GroupDurableObject"]
+new_sqlite_classes = ["PersonIdCounterDurableObject", "GroupDurableObject"]
 ```
 
 ### Secrets

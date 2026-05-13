@@ -4,6 +4,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Map;
 use thiserror::Error;
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
+use tokio::sync::RwLock;
+
 #[cfg(target_arch = "wasm32")]
 use worker::{Env, Headers, Method, Request, RequestInit, Response, State};
 
@@ -93,6 +98,49 @@ impl GroupStore for NoopGroupStore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub struct MemoryGroupStore {
+    records: RwLock<HashMap<(String, String), GroupRecord>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl MemoryGroupStore {
+    pub fn new() -> Self {
+        Self {
+            records: RwLock::new(HashMap::new()),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[async_trait]
+impl GroupStore for MemoryGroupStore {
+    async fn apply_update(&self, update: GroupUpdate) -> Result<GroupSnapshot, GroupError> {
+        let key = (update.group_type.clone(), update.group_key.clone());
+        let mut records = self.records.write().await;
+        let record = records
+            .entry(key)
+            .or_insert_with(|| GroupRecord::new(update.group_type, update.group_key));
+        record.apply_update(&update.properties);
+        Ok(GroupSnapshot {
+            record: Some(record.clone()),
+        })
+    }
+
+    async fn get_snapshot(
+        &self,
+        group_type: &str,
+        group_key: &str,
+    ) -> Result<GroupSnapshot, GroupError> {
+        let records = self.records.read().await;
+        Ok(GroupSnapshot {
+            record: records
+                .get(&(group_type.to_string(), group_key.to_string()))
+                .cloned(),
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GroupTypeMap {
     types: [Option<String>; 5],
@@ -112,6 +160,11 @@ impl GroupTypeMap {
     pub fn types(&self) -> &[Option<String>; 5] {
         &self.types
     }
+}
+
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+fn group_object_name(group_type: &str, group_key: &str) -> Result<String, serde_json::Error> {
+    serde_json::to_string(&(group_type, group_key))
 }
 
 impl Default for GroupTypeMap {
@@ -148,8 +201,7 @@ mod durable {
 
             match (method, path.as_str()) {
                 (Method::Get, "/record") => {
-                    let record: Option<GroupRecord> =
-                        self.state.storage().get(RECORD_KEY).await?;
+                    let record: Option<GroupRecord> = self.state.storage().get(RECORD_KEY).await?;
                     Response::from_json(&record)
                 }
                 (Method::Post, "/apply") => {
@@ -185,7 +237,7 @@ mod durable {
             group_type: &str,
             group_key: &str,
         ) -> Result<worker::durable::Stub, GroupError> {
-            let name = format!("{group_type}:{group_key}");
+            let name = group_object_name(group_type, group_key)?;
             let id = self.namespace.id_from_name(&name)?;
             Ok(id.get_stub()?)
         }
@@ -218,9 +270,8 @@ mod durable {
             let status = response.status_code();
             let body_text = response.text().await.unwrap_or_default();
             if !(200..300).contains(&status) {
-                let message = format!(
-                    "durable object {path} failed with status {status}: {body_text}"
-                );
+                let message =
+                    format!("durable object {path} failed with status {status}: {body_text}");
                 worker::console_error!("{message}");
                 return Err(GroupError::Message(message));
             }
@@ -282,3 +333,15 @@ pub use durable::store_from_env;
 
 #[cfg(target_arch = "wasm32")]
 pub use durable::GroupDurableObject;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn durable_group_names_do_not_collide_on_colons() {
+        let left = group_object_name("a:b", "c").unwrap();
+        let right = group_object_name("a", "b:c").unwrap();
+        assert_ne!(left, right);
+    }
+}

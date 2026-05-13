@@ -4,9 +4,11 @@ mod helpers;
 use std::time::Duration;
 
 use helpers::{
-    cleanup, spawn_app, spawn_app_with_options, spawn_pipeline_stub, start_docker_pipeline,
+    cleanup, collect_events_until, spawn_app, spawn_app_with_options,
+    spawn_app_with_runtime_options, spawn_pipeline_stub, start_docker_pipeline,
     stop_docker_pipeline, wait_for_events, wait_for_pipeline_events,
 };
+use hogflare::groups::GroupTypeMap;
 use reqwest::Client;
 use serde_json::Value;
 use tokio::process::Command;
@@ -155,6 +157,71 @@ async fn posthog_js_identify_is_forwarded_to_pipeline() -> Result<(), Box<dyn st
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posthog_js_identify_aliases_anonymous_id_with_sdk_payload(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let debug_token = "debug-js-sdk-identify";
+    let anon_id = "anonymous-sdk-user";
+    let identified_id = "identified-sdk-user";
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app_with_runtime_options(
+        pipeline_endpoint,
+        None,
+        None,
+        None,
+        Some(debug_token.to_string()),
+        None,
+        GroupTypeMap::default(),
+    )
+    .await?;
+
+    let status = Command::new("bun")
+        .arg("run")
+        .arg("posthog_identify_alias.js")
+        .current_dir("tests/js_client")
+        .env("HOGFLARE_HOST", format!("http://{}", address))
+        .env("HOGFLARE_API_KEY", "phc_test_integration_key")
+        .env("HOGFLARE_ANON_DISTINCT_ID", anon_id)
+        .env("HOGFLARE_IDENTIFIED_ID", identified_id)
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(format!("posthog identify alias script exited with status {status:?}").into());
+    }
+
+    let events = collect_events_until(&mut pipeline_rx, 1, Duration::from_secs(10)).await?;
+    let event = events
+        .iter()
+        .find(|e| e["event"] == "$identify")
+        .expect("expected $identify event in pipeline payload");
+
+    assert_eq!(event["source"], "posthog");
+    assert_eq!(event["distinct_id"], identified_id);
+    assert_eq!(
+        event["person_properties"]["email"],
+        "sdk-identify@example.com"
+    );
+
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+    let snapshot: Value = client
+        .get(format!("http://{}/__debug/person/{}", address, anon_id))
+        .header("x-hogflare-debug-token", debug_token)
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    assert_eq!(snapshot["canonical_id"], identified_id);
+    assert_eq!(
+        snapshot["record"]["properties"]["email"],
+        "sdk-identify@example.com"
+    );
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn posthog_js_group_is_forwarded_to_pipeline() -> Result<(), Box<dyn std::error::Error>> {
     let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
     let (address, server_handle) = spawn_app(pipeline_endpoint).await?;
@@ -182,6 +249,70 @@ async fn posthog_js_group_is_forwarded_to_pipeline() -> Result<(), Box<dyn std::
     assert_eq!(event["source"], "posthog");
     assert_eq!(event["extra"]["group_type"], "company");
     assert_eq!(event["extra"]["group_key"], "acme-corp");
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posthog_js_compressed_group_flow_hydrates_followup_capture(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let group_type_map = GroupTypeMap::new([Some("company".to_string()), None, None, None, None]);
+    let (address, server_handle) = spawn_app_with_runtime_options(
+        pipeline_endpoint,
+        None,
+        None,
+        None,
+        None,
+        None,
+        group_type_map,
+    )
+    .await?;
+
+    let status = Command::new("bun")
+        .arg("run")
+        .arg("posthog_compressed_group_flow.js")
+        .current_dir("tests/js_client")
+        .env("HOGFLARE_HOST", format!("http://{}", address))
+        .env("HOGFLARE_API_KEY", "phc_test_integration_key")
+        .env("HOGFLARE_DISTINCT_ID", "js-compressed-group-user")
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(
+            format!("posthog compressed group script exited with status {status:?}").into(),
+        );
+    }
+
+    let events = collect_events_until(&mut pipeline_rx, 2, Duration::from_secs(10)).await?;
+    let group_event = events
+        .iter()
+        .find(|e| e["event"] == "$groupidentify")
+        .expect("expected $groupidentify event in pipeline payload");
+    assert_eq!(group_event["source"], "posthog");
+    assert_eq!(group_event["extra"]["group_type"], "company");
+    assert_eq!(group_event["extra"]["group_key"], "sdk-acme");
+    assert_eq!(group_event["group0"], "sdk-acme");
+    assert_eq!(
+        group_event["group_properties"]["company"]["plan"],
+        "enterprise"
+    );
+    assert_eq!(group_event["group_properties"]["company"]["seats"], 42);
+
+    let capture_event = events
+        .iter()
+        .find(|e| e["event"] == "js-grouped-capture")
+        .expect("expected grouped capture event in pipeline payload");
+    assert_eq!(capture_event["source"], "posthog");
+    assert_eq!(capture_event["distinct_id"], "js-compressed-group-user");
+    assert_eq!(capture_event["group0"], "sdk-acme");
+    assert_eq!(
+        capture_event["group_properties"]["company"]["plan"],
+        "enterprise"
+    );
+    assert_eq!(capture_event["properties"]["client"], "posthog-js");
 
     cleanup(server_handle, pipeline_handle).await;
     Ok(())
