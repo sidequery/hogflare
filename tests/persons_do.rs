@@ -132,9 +132,6 @@ CLOUDFLARE_PIPELINE_ENDPOINT = "{pipeline}"
 CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "5"
 PERSON_DEBUG_TOKEN = "{debug_token}"
 
-[build.upload]
-format = "modules"
-
 [[durable_objects.bindings]]
 name = "PERSONS"
 class_name = "PersonDurableObject"
@@ -189,9 +186,10 @@ fn spawn_wrangler_dev(
     let stderr_path = log_dir.join("wrangler.stderr.log");
     let stdout = fs::File::create(&stdout_path)?;
     let stderr = fs::File::create(&stderr_path)?;
+    let wrangler_script = wrangler_script_path()?;
 
-    let child = Command::new("bunx")
-        .arg("wrangler")
+    let child = Command::new("node")
+        .arg(wrangler_script)
         .arg("dev")
         .arg("--local")
         .arg("--config")
@@ -212,6 +210,19 @@ fn spawn_wrangler_dev(
         stdout_path,
         stderr_path,
     })
+}
+
+fn wrangler_script_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path =
+        std::env::current_dir()?.join("tests/js_client/node_modules/wrangler/bin/wrangler.js");
+    if !path.exists() {
+        return Err(format!(
+            "missing Wrangler CLI at {}; run `bun install --cwd tests/js_client`",
+            path.display()
+        )
+        .into());
+    }
+    Ok(path)
 }
 
 async fn wait_for_health(

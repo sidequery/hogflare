@@ -8,5 +8,8 @@
     "jsdom": "^24.0.0",
     "posthog-js": "^1.373.4",
     "posthog-node": "^5.34.1"
+  },
+  "devDependencies": {
+    "wrangler": "4.90.1"
   }
 }
