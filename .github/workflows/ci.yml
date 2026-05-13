@@ -38,11 +38,16 @@ jobs:
             cargo install worker-build@^0.7
           fi
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
       - name: Install JS test dependencies
-        run: bun install --cwd tests/js_client
+        run: bun install --cwd tests/js_client --frozen-lockfile
 
       - name: Verify Docker Compose
         run: docker compose version

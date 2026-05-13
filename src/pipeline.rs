@@ -14,8 +14,8 @@ use reqwest::Client;
 
 #[cfg(target_arch = "wasm32")]
 use worker::{
-    AbortController, Delay, Fetch, Headers, Method, Request, RequestInit,
-    wasm_bindgen::JsValue, wasm_bindgen_futures::spawn_local,
+    wasm_bindgen::JsValue, wasm_bindgen_futures::spawn_local, AbortController, Delay, Fetch,
+    Headers, Method, Request, RequestInit,
 };
 
 use crate::models::{
@@ -103,9 +103,8 @@ impl PipelineClient {
             init.with_headers(headers);
             init.with_body(Some(JsValue::from_str(&body)));
 
-            let request =
-                Request::new_with_init(self.endpoint.as_str(), &init)
-                    .map_err(PipelineError::RequestBuild)?;
+            let request = Request::new_with_init(self.endpoint.as_str(), &init)
+                .map_err(PipelineError::RequestBuild)?;
 
             let controller = AbortController::default();
             let signal = controller.signal();
@@ -431,7 +430,6 @@ impl PipelineEvent {
         self.properties = Some(merged);
         self
     }
-
 }
 
 #[derive(Debug, Error)]
@@ -572,14 +570,8 @@ mod tests {
         };
 
         let mut enrichment = Map::new();
-        enrichment.insert(
-            "$ip".to_string(),
-            Value::String("198.51.100.2".to_string()),
-        );
-        enrichment.insert(
-            "cf_ray".to_string(),
-            Value::String("ray-xyz".to_string()),
-        );
+        enrichment.insert("$ip".to_string(), Value::String("198.51.100.2".to_string()));
+        enrichment.insert("cf_ray".to_string(), Value::String("ray-xyz".to_string()));
 
         let event = PipelineEvent::from_capture(payload).with_enrichment(&enrichment);
         let props = match event.properties {

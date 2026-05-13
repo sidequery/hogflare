@@ -97,12 +97,12 @@ impl PersonRecord {
         }
 
         for (key, value) in &secondary.properties_set_once {
-            if merged.properties.contains_key(key)
-                || merged.properties_set_once.contains_key(key)
-            {
+            if merged.properties.contains_key(key) || merged.properties_set_once.contains_key(key) {
                 continue;
             }
-            merged.properties_set_once.insert(key.clone(), value.clone());
+            merged
+                .properties_set_once
+                .insert(key.clone(), value.clone());
         }
 
         merged.version = merged.version.saturating_add(1);
@@ -237,8 +237,16 @@ impl MemoryPersonStore {
     async fn resolve_id(&self, distinct_id: &str) -> String {
         let redirects = self.redirects.read().await;
         let mut current = distinct_id.to_string();
+        let mut seen = Vec::new();
         let mut hops = 0;
         while let Some(next) = redirects.get(&current) {
+            if next == &current {
+                return current;
+            }
+            if seen.iter().any(|id| id == &current) {
+                return seen.into_iter().min().unwrap_or(current);
+            }
+            seen.push(current.clone());
             current = next.clone();
             hops += 1;
             if hops > 10 {
@@ -381,8 +389,7 @@ pub fn update_from_capture(request: &CaptureRequest) -> Option<PersonUpdate> {
 pub fn update_from_identify(request: &IdentifyRequest) -> Option<PersonUpdate> {
     let properties = request.properties.as_ref()?;
     let props = properties.as_object()?;
-    let (set, mut set_once) = if props.contains_key("$set") || props.contains_key("$set_once")
-    {
+    let (set, mut set_once) = if props.contains_key("$set") || props.contains_key("$set_once") {
         (
             extract_object(props.get("$set")),
             extract_object(props.get("$set_once")),
@@ -459,12 +466,12 @@ fn extract_unset(value: Option<&Value>) -> Vec<String> {
 mod durable {
     use super::*;
 
+    use worker::wasm_bindgen;
+    use worker::wasm_bindgen::JsValue;
     use worker::{
         durable_object, DurableObject, Env, Headers, Method, ObjectNamespace, Request, RequestInit,
         Response, State,
     };
-    use worker::wasm_bindgen;
-    use worker::wasm_bindgen::JsValue;
 
     const RECORD_KEY: &str = "record";
     const REDIRECT_KEY: &str = "redirect";
@@ -485,6 +492,35 @@ mod durable {
         id: i64,
     }
 
+    #[derive(Serialize, Deserialize)]
+    struct EnsurePersonRequest {
+        distinct_id: String,
+        team_id: Option<i64>,
+        allocated_id: i64,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct ApplyPersonUpdateRequest {
+        update: PersonUpdate,
+        team_id: Option<i64>,
+        allocated_id: i64,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    struct MergePersonRequest {
+        alias: PersonAliasWire,
+        secondary: Option<PersonRecord>,
+        team_id: Option<i64>,
+        primary_allocated_id: i64,
+        secondary_allocated_id: i64,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    struct PersonAliasWire {
+        distinct_id: String,
+        alias: String,
+    }
+
     #[durable_object]
     pub struct PersonDurableObject {
         state: State,
@@ -503,25 +539,91 @@ mod durable {
             match (method, path.as_str()) {
                 (Method::Get, "/resolve") => {
                     let redirect: Option<String> = self.state.storage().get(REDIRECT_KEY).await?;
-                    Response::from_json(&ResolveResponse { redirect_to: redirect })
+                    Response::from_json(&ResolveResponse {
+                        redirect_to: redirect,
+                    })
                 }
                 (Method::Get, "/record") => {
                     let record: Option<PersonRecord> = self.state.storage().get(RECORD_KEY).await?;
                     Response::from_json(&record)
                 }
                 (Method::Post, "/apply") => {
-                    let update: PersonUpdate = req.json().await?;
+                    let body: ApplyPersonUpdateRequest = req.json().await?;
+                    let update = body.update;
                     let mut record = self
                         .state
                         .storage()
                         .get::<PersonRecord>(RECORD_KEY)
                         .await?
                         .unwrap_or_else(|| {
-                            PersonRecord::new(update.distinct_id.clone(), None, 0)
+                            PersonRecord::new(
+                                update.distinct_id.clone(),
+                                body.team_id,
+                                body.allocated_id,
+                            )
                         });
+                    if record.id == 0 {
+                        record.id = body.allocated_id;
+                    }
                     record.apply_update(&update);
-                    self.state.storage().put(RECORD_KEY, record).await?;
-                    Response::from_json(&serde_json::json!({ "ok": true }))
+                    self.state.storage().put(RECORD_KEY, &record).await?;
+                    Response::from_json(&record)
+                }
+                (Method::Post, "/ensure") => {
+                    let body: EnsurePersonRequest = req.json().await?;
+                    let existing = self.state.storage().get::<PersonRecord>(RECORD_KEY).await?;
+                    let created = existing.is_none();
+                    let mut record = existing.unwrap_or_else(|| {
+                        PersonRecord::new(body.distinct_id.clone(), body.team_id, body.allocated_id)
+                    });
+                    let mut changed = false;
+                    if record.id == 0 {
+                        record.id = body.allocated_id;
+                        changed = true;
+                    }
+                    if !record.distinct_ids.iter().any(|id| id == &body.distinct_id) {
+                        record.ensure_distinct_id(&body.distinct_id);
+                        changed = true;
+                    }
+                    if changed || created {
+                        self.state.storage().put(RECORD_KEY, &record).await?;
+                    }
+                    Response::from_json(&record)
+                }
+                (Method::Post, "/merge") => {
+                    let body: MergePersonRequest = req.json().await?;
+                    let mut primary_record = self
+                        .state
+                        .storage()
+                        .get::<PersonRecord>(RECORD_KEY)
+                        .await?
+                        .unwrap_or_else(|| {
+                            PersonRecord::new(
+                                body.alias.distinct_id.clone(),
+                                body.team_id,
+                                body.primary_allocated_id,
+                            )
+                        });
+                    if primary_record.id == 0 {
+                        primary_record.id = body.primary_allocated_id;
+                    }
+                    primary_record.ensure_distinct_id(&body.alias.distinct_id);
+
+                    let mut secondary_record = body.secondary.unwrap_or_else(|| {
+                        PersonRecord::new(
+                            body.alias.alias.clone(),
+                            body.team_id,
+                            body.secondary_allocated_id,
+                        )
+                    });
+                    if secondary_record.id == 0 {
+                        secondary_record.id = body.secondary_allocated_id;
+                    }
+                    secondary_record.ensure_distinct_id(&body.alias.alias);
+
+                    let merged = PersonRecord::merge(&primary_record, &secondary_record);
+                    self.state.storage().put(RECORD_KEY, &merged).await?;
+                    Response::from_json(&merged)
                 }
                 (Method::Post, "/set_record") => {
                     let record: PersonRecord = req.json().await?;
@@ -615,25 +717,20 @@ mod durable {
                 init.with_body(Some(JsValue::from_str(&payload)));
             }
 
-            let req = Request::new_with_init(
-                &format!("https://person.internal{path}"),
-                &init,
-            )?;
+            let req = Request::new_with_init(&format!("https://person.internal{path}"), &init)?;
             let mut response = stub.fetch_with_request(req).await?;
             let status = response.status_code();
             let body_text = response.text().await.unwrap_or_default();
             if !(200..300).contains(&status) {
-                let message = format!(
-                    "durable object {path} failed with status {status}: {body_text}"
-                );
+                let message =
+                    format!("durable object {path} failed with status {status}: {body_text}");
                 worker::console_error!("{message}");
                 return Err(PersonError::Message(message));
             }
 
             serde_json::from_str(&body_text).map_err(|err| {
-                let message = format!(
-                    "durable object {path} returned invalid json: {err} ({body_text})"
-                );
+                let message =
+                    format!("durable object {path} returned invalid json: {err} ({body_text})");
                 worker::console_error!("{message}");
                 PersonError::Message(message)
             })
@@ -653,10 +750,30 @@ mod durable {
         }
 
         async fn resolve_id(&self, distinct_id: &str) -> Result<String, PersonError> {
-            let response: ResolveResponse = self
-                .request_json(distinct_id, Method::Get, "/resolve", None::<&()>)
-                .await?;
-            Ok(response.redirect_to.unwrap_or_else(|| distinct_id.to_string()))
+            let mut current = distinct_id.to_string();
+            let mut seen = std::collections::HashSet::new();
+            let mut chain = Vec::new();
+            for _ in 0..10 {
+                if !seen.insert(current.clone()) {
+                    chain.push(current);
+                    return Ok(chain
+                        .into_iter()
+                        .min()
+                        .unwrap_or_else(|| distinct_id.to_string()));
+                }
+                chain.push(current.clone());
+                let response: ResolveResponse = self
+                    .request_json(&current, Method::Get, "/resolve", None::<&()>)
+                    .await?;
+                let Some(next) = response.redirect_to else {
+                    return Ok(current);
+                };
+                if next == current {
+                    return Ok(current);
+                }
+                current = next;
+            }
+            Ok(chain.into_iter().min().unwrap_or(current))
         }
 
         async fn next_person_id(&self) -> Result<i64, PersonError> {
@@ -672,47 +789,28 @@ mod durable {
             let status = response.status_code();
             let body_text = response.text().await.unwrap_or_default();
             if !(200..300).contains(&status) {
-                let message = format!(
-                    "person id counter failed with status {status}: {body_text}"
-                );
+                let message = format!("person id counter failed with status {status}: {body_text}");
                 worker::console_error!("{message}");
                 return Err(PersonError::Message(message));
             }
             serde_json::from_str::<CounterResponse>(&body_text)
                 .map_err(|err| {
-                    let message = format!(
-                        "person id counter returned invalid json: {err} ({body_text})"
-                    );
+                    let message =
+                        format!("person id counter returned invalid json: {err} ({body_text})");
                     worker::console_error!("{message}");
                     PersonError::Message(message)
                 })
                 .map(|resp| resp.id)
         }
 
-        async fn get_record(
-            &self,
-            distinct_id: &str,
-        ) -> Result<Option<PersonRecord>, PersonError> {
+        async fn get_record(&self, distinct_id: &str) -> Result<Option<PersonRecord>, PersonError> {
             let record: Option<PersonRecord> = self
                 .request_json(distinct_id, Method::Get, "/record", None::<&()>)
                 .await?;
             Ok(record)
         }
 
-        async fn put_record(
-            &self,
-            distinct_id: &str,
-            record: PersonRecord,
-        ) -> Result<(), PersonError> {
-            self.request_empty(distinct_id, Method::Post, "/set_record", Some(&record))
-                .await
-        }
-
-        async fn redirect(
-            &self,
-            distinct_id: &str,
-            redirect_to: &str,
-        ) -> Result<(), PersonError> {
+        async fn redirect(&self, distinct_id: &str, redirect_to: &str) -> Result<(), PersonError> {
             self.request_empty(
                 distinct_id,
                 Method::Post,
@@ -729,30 +827,32 @@ mod durable {
     impl PersonStore for DurablePersonStore {
         async fn apply_update(&self, update: PersonUpdate) -> Result<PersonSnapshot, PersonError> {
             let canonical = self.resolve_id(&update.distinct_id).await?;
-            let mut record = self
-                .get_record(&canonical)
-                .await?
-                .unwrap_or_else(|| {
-                    PersonRecord::new(
-                        canonical.clone(),
-                        self.team_id,
-                        0,
-                    )
-                });
-            if record.id == 0 {
-                record.id = self.next_person_id().await?;
-            }
-            record.apply_update(&update);
-            self.put_record(&canonical, record).await?;
+            let original_distinct_id = update.distinct_id.clone();
+            let record: PersonRecord = self
+                .request_json(
+                    &canonical,
+                    Method::Post,
+                    "/apply",
+                    Some(&ApplyPersonUpdateRequest {
+                        update,
+                        team_id: self.team_id,
+                        allocated_id: self.next_person_id().await?,
+                    }),
+                )
+                .await?;
 
-            if canonical != update.distinct_id {
-                self.redirect(&update.distinct_id, &canonical).await?;
+            if canonical != original_distinct_id {
+                self.redirect(&original_distinct_id, &canonical).await?;
+            }
+            for id in &record.distinct_ids {
+                if id != &canonical {
+                    self.redirect(id, &canonical).await?;
+                }
             }
 
-            let record = self.get_record(&canonical).await?;
             Ok(PersonSnapshot {
                 canonical_id: canonical,
-                record,
+                record: Some(record),
             })
         }
 
@@ -768,62 +868,60 @@ mod durable {
                 });
             }
 
-            let mut primary_record = self
-                .get_record(&primary_id)
-                .await?
-                .unwrap_or_else(|| PersonRecord::new(primary_id.clone(), self.team_id, 0));
-            if primary_record.id == 0 {
-                primary_record.id = self.next_person_id().await?;
-            }
-            primary_record.ensure_distinct_id(&alias.distinct_id);
+            let secondary = self.get_record(&secondary_id).await?;
+            let merged: PersonRecord = self
+                .request_json(
+                    &primary_id,
+                    Method::Post,
+                    "/merge",
+                    Some(&MergePersonRequest {
+                        alias: PersonAliasWire {
+                            distinct_id: alias.distinct_id,
+                            alias: alias.alias,
+                        },
+                        secondary,
+                        team_id: self.team_id,
+                        primary_allocated_id: self.next_person_id().await?,
+                        secondary_allocated_id: self.next_person_id().await?,
+                    }),
+                )
+                .await?;
 
-            let mut secondary_record = self
-                .get_record(&secondary_id)
-                .await?
-                .unwrap_or_else(|| PersonRecord::new(secondary_id.clone(), self.team_id, 0));
-            if secondary_record.id == 0 {
-                secondary_record.id = self.next_person_id().await?;
-            }
-            secondary_record.ensure_distinct_id(&alias.alias);
-
-            let merged = PersonRecord::merge(&primary_record, &secondary_record);
-            self.put_record(&primary_id, merged).await?;
-
-            for id in &secondary_record.distinct_ids {
-                self.redirect(id, &primary_id).await?;
+            for id in &merged.distinct_ids {
+                if id != &primary_id {
+                    self.redirect(id, &primary_id).await?;
+                }
             }
             self.redirect(&secondary_id, &primary_id).await?;
-            self.redirect(&alias.alias, &primary_id).await?;
 
-            let record = self.get_record(&primary_id).await?;
             Ok(PersonSnapshot {
                 canonical_id: primary_id,
-                record,
+                record: Some(merged),
             })
         }
 
         async fn ensure_person(&self, distinct_id: &str) -> Result<PersonSnapshot, PersonError> {
             let canonical = self.resolve_id(distinct_id).await?;
-            let mut record = self
-                .get_record(&canonical)
-                .await?
-                .unwrap_or_else(|| PersonRecord::new(canonical.clone(), self.team_id, 0));
-            if record.id == 0 {
-                record.id = self.next_person_id().await?;
-            }
-            if !record.distinct_ids.iter().any(|id| id == distinct_id) {
-                record.ensure_distinct_id(distinct_id);
-                self.put_record(&canonical, record).await?;
-            }
+            let record: PersonRecord = self
+                .request_json(
+                    &canonical,
+                    Method::Post,
+                    "/ensure",
+                    Some(&EnsurePersonRequest {
+                        distinct_id: distinct_id.to_string(),
+                        team_id: self.team_id,
+                        allocated_id: self.next_person_id().await?,
+                    }),
+                )
+                .await?;
 
             if canonical != distinct_id {
                 self.redirect(distinct_id, &canonical).await?;
             }
 
-            let record = self.get_record(&canonical).await?;
             Ok(PersonSnapshot {
                 canonical_id: canonical,
-                record,
+                record: Some(record),
             })
         }
 
@@ -837,10 +935,7 @@ mod durable {
         }
     }
 
-    pub fn store_from_env(
-        env: &Env,
-        team_id: Option<i64>,
-    ) -> std::sync::Arc<dyn PersonStore> {
+    pub fn store_from_env(env: &Env, team_id: Option<i64>) -> std::sync::Arc<dyn PersonStore> {
         match env.durable_object("PERSONS") {
             Ok(namespace) => {
                 let counter = env.durable_object("PERSON_ID_COUNTER").ok();
@@ -930,9 +1025,7 @@ mod tests {
     #[test]
     fn merge_prefers_primary() {
         let mut primary = PersonRecord::new("primary".to_string(), None, 1);
-        primary
-            .properties
-            .insert("plan".to_string(), json!("pro"));
+        primary.properties.insert("plan".to_string(), json!("pro"));
         primary
             .properties_set_once
             .insert("created_at".to_string(), json!("2024-01-01"));
@@ -957,5 +1050,18 @@ mod tests {
         );
         assert!(merged.distinct_ids.contains(&"primary".to_string()));
         assert!(merged.distinct_ids.contains(&"secondary".to_string()));
+    }
+
+    #[tokio::test]
+    async fn memory_redirect_cycles_choose_stable_canonical() {
+        let store = MemoryPersonStore::new(None);
+        {
+            let mut redirects = store.redirects.write().await;
+            redirects.insert("a".to_string(), "b".to_string());
+            redirects.insert("b".to_string(), "a".to_string());
+        }
+
+        assert_eq!(store.resolve_id("a").await, "a");
+        assert_eq!(store.resolve_id("b").await, "a");
     }
 }

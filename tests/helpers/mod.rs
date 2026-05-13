@@ -63,6 +63,27 @@ pub async fn spawn_app_with_options(
     signing_secret: Option<String>,
     feature_flags: Option<hogflare::feature_flags::FeatureFlagStore>,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
+    spawn_app_with_runtime_options(
+        pipeline_endpoint,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        None,
+        feature_flags,
+        hogflare::groups::GroupTypeMap::default(),
+    )
+    .await
+}
+
+pub async fn spawn_app_with_runtime_options(
+    pipeline_endpoint: Url,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    person_debug_token: Option<String>,
+    feature_flags: Option<hogflare::feature_flags::FeatureFlagStore>,
+    group_type_map: hogflare::groups::GroupTypeMap,
+) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
     let pipeline_client = PipelineClient::new(pipeline_endpoint, None, Duration::from_secs(5))?;
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -75,13 +96,15 @@ pub async fn spawn_app_with_options(
                 listener,
                 pipeline,
                 None,
-                Arc::new(hogflare::groups::NoopGroupStore),
-                hogflare::groups::GroupTypeMap::default(),
+                Arc::new(hogflare::groups::MemoryGroupStore::new()),
+                group_type_map,
                 decide_api_token,
                 session_recording_endpoint,
                 signing_secret,
-                None,
-                Arc::new(feature_flags.unwrap_or_else(hogflare::feature_flags::FeatureFlagStore::empty)),
+                person_debug_token,
+                Arc::new(
+                    feature_flags.unwrap_or_else(hogflare::feature_flags::FeatureFlagStore::empty),
+                ),
             )
             .await
             {
@@ -101,6 +124,38 @@ pub async fn wait_for_events(
         Ok(None) => Err("pipeline receiver closed unexpectedly".into()),
         Err(_) => Err("timed out waiting for pipeline payload".into()),
     }
+}
+
+pub async fn collect_events_until(
+    receiver: &mut mpsc::Receiver<Vec<Value>>,
+    min_count: usize,
+    deadline_after: Duration,
+) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
+    let deadline = tokio::time::Instant::now() + deadline_after;
+    let mut all_events = Vec::new();
+
+    while all_events.len() < min_count && tokio::time::Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        match timeout(remaining.min(Duration::from_millis(500)), receiver.recv()).await {
+            Ok(Some(events)) => all_events.extend(events),
+            Ok(None) => return Err("pipeline receiver closed unexpectedly".into()),
+            Err(_) => {}
+        }
+    }
+
+    if all_events.len() < min_count {
+        return Err(format!(
+            "timed out waiting for {min_count} events, received {}",
+            all_events.len()
+        )
+        .into());
+    }
+
+    Ok(all_events)
 }
 
 pub async fn cleanup(server_handle: JoinHandle<()>, pipeline_handle: JoinHandle<()>) {

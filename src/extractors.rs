@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::{collections::HashMap, io::Read};
 
 use axum::async_trait;
 use axum::body::{to_bytes, Body};
@@ -58,16 +58,13 @@ where
 {
     type Rejection = Infallible;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
         let properties = build_enrichment_properties(parts);
         Ok(Self { properties })
     }
 }
 
-trait ApplyApiKey {
+pub(crate) trait ApplyApiKey {
     fn ensure_api_key(&mut self, api_key: &str);
 }
 
@@ -238,13 +235,18 @@ where
     ) -> Result<Self, Self::Rejection> {
         let (parts, body) = request.into_parts();
         let headers = parts.headers;
+        let query = parts.uri.query().map(str::to_string);
         let bytes = to_bytes(body, usize::MAX)
             .await
             .map_err(PayloadExtractorError::BodyRead)?;
 
         verify_signature(&headers, &bytes, state.signing_secret.as_deref())?;
         let decoded = decode_content_encoding(&headers, &bytes)?;
-        let mut payloads = parse_posthog_body::<T>(&headers, &decoded)?;
+        let query_params = parse_query_params(query.as_deref())?;
+        let query_compression = query_param(&query_params, "compression")
+            .or_else(|| query_param(&query_params, "compression_method"));
+        let mut payloads =
+            parse_posthog_body_with_compression::<T>(&headers, &decoded, query_compression)?;
         let header_api_key = header_api_key(&headers);
         apply_api_key(&mut payloads, header_api_key.as_deref());
         let sent_at = header_sent_at(&headers);
@@ -266,13 +268,17 @@ impl FromRequest<AppState, Body> for PostHogBatchPayload {
     ) -> Result<Self, Self::Rejection> {
         let (parts, body) = request.into_parts();
         let headers = parts.headers;
+        let query = parts.uri.query().map(str::to_string);
         let bytes = to_bytes(body, usize::MAX)
             .await
             .map_err(PayloadExtractorError::BodyRead)?;
 
         verify_signature(&headers, &bytes, state.signing_secret.as_deref())?;
         let decoded = decode_content_encoding(&headers, &bytes)?;
-        let mut payload = parse_posthog_batch_body(&headers, &decoded)?;
+        let query_params = parse_query_params(query.as_deref())?;
+        let query_compression = query_param(&query_params, "compression")
+            .or_else(|| query_param(&query_params, "compression_method"));
+        let mut payload = parse_posthog_batch_body(&headers, &decoded, query_compression)?;
         let header_api_key = header_api_key(&headers);
         if payload.api_key.is_none() {
             payload.api_key = header_api_key;
@@ -398,7 +404,29 @@ fn constant_time_eq_hex(expected: &[u8], provided: &str) -> bool {
     expected_hex.as_bytes().ct_eq(cleaned.as_bytes()).into()
 }
 
-fn parse_posthog_body<T>(headers: &HeaderMap, body: &[u8]) -> Result<Vec<T>, PayloadExtractorError>
+fn parse_query_params(
+    query: Option<&str>,
+) -> Result<HashMap<String, String>, PayloadExtractorError> {
+    let Some(query) = query else {
+        return Ok(HashMap::new());
+    };
+    let pairs: Vec<(String, String)> =
+        serde_urlencoded::from_str(query).map_err(PayloadExtractorError::Form)?;
+    Ok(pairs.into_iter().collect())
+}
+
+fn query_param<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
+    params
+        .get(key)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty() && *value != "undefined")
+}
+
+fn parse_posthog_body_with_compression<T>(
+    headers: &HeaderMap,
+    body: &[u8],
+    query_compression: Option<&str>,
+) -> Result<Vec<T>, PayloadExtractorError>
 where
     T: DeserializeOwned,
 {
@@ -419,8 +447,15 @@ where
         Some("application/x-www-form-urlencoded")
     );
 
+    if let Some(compression) = query_compression {
+        if !is_form && !body.starts_with(b"data=") {
+            let decoded = decode_compressed_body(body, compression)?;
+            return parse_json_payload(&decoded);
+        }
+    }
+
     if is_form || body.starts_with(b"data=") {
-        parse_form_payload(body)
+        parse_form_payload(body, query_compression)
     } else {
         parse_json_payload(body)
     }
@@ -429,6 +464,7 @@ where
 fn parse_posthog_batch_body(
     headers: &HeaderMap,
     body: &[u8],
+    query_compression: Option<&str>,
 ) -> Result<BatchRequest, PayloadExtractorError> {
     let content_type = headers
         .get(header::CONTENT_TYPE)
@@ -447,14 +483,24 @@ fn parse_posthog_batch_body(
         Some("application/x-www-form-urlencoded")
     );
 
+    if let Some(compression) = query_compression {
+        if !is_form && !body.starts_with(b"data=") {
+            let decoded = decode_compressed_body(body, compression)?;
+            return parse_json_batch_payload(&decoded);
+        }
+    }
+
     if is_form || body.starts_with(b"data=") {
-        parse_form_batch_payload(body)
+        parse_form_batch_payload(body, query_compression)
     } else {
         parse_json_batch_payload(body)
     }
 }
 
-fn parse_form_payload<T>(body: &[u8]) -> Result<Vec<T>, PayloadExtractorError>
+fn parse_form_payload<T>(
+    body: &[u8],
+    query_compression: Option<&str>,
+) -> Result<Vec<T>, PayloadExtractorError>
 where
     T: DeserializeOwned,
 {
@@ -476,11 +522,14 @@ where
     }
 
     let data = data_value.ok_or(PayloadExtractorError::MissingData)?;
-    let payloads = decode_data_value(data, compression.as_deref())?;
+    let payloads = decode_data_value(data, compression.as_deref().or(query_compression))?;
     deserialize_events(payloads, shared)
 }
 
-fn parse_form_batch_payload(body: &[u8]) -> Result<BatchRequest, PayloadExtractorError> {
+fn parse_form_batch_payload(
+    body: &[u8],
+    query_compression: Option<&str>,
+) -> Result<BatchRequest, PayloadExtractorError> {
     let form_pairs: Vec<(String, String)> =
         serde_urlencoded::from_bytes(body).map_err(PayloadExtractorError::Form)?;
 
@@ -499,7 +548,7 @@ fn parse_form_batch_payload(body: &[u8]) -> Result<BatchRequest, PayloadExtracto
     }
 
     let data = data_value.ok_or(PayloadExtractorError::MissingData)?;
-    let content = decode_data_content(data, compression.as_deref())?;
+    let content = decode_data_content(data, compression.as_deref().or(query_compression))?;
     apply_batch_data(content, &mut map)?;
 
     serde_json::from_value(Value::Object(map)).map_err(PayloadExtractorError::Json)
@@ -599,17 +648,19 @@ fn decode_data_string(
         .unwrap_or_else(|_| data.as_bytes().to_vec());
 
     let decoded = match compression.map(|value| value.to_ascii_lowercase()) {
+        Some(ref algo) if algo == "base64" => raw.clone(),
         Some(ref algo) if algo == "gzip" => decompress_gzip(&raw)?,
-        Some(ref algo) if algo == "gzip-js" || algo == "zlib" || algo == "deflate" => {
-            decompress_zlib(&raw)?
+        Some(ref algo) if algo == "gzip-js" => {
+            decompress_gzip(&raw).or_else(|_| decompress_zlib(&raw))?
         }
+        Some(ref algo) if algo == "zlib" || algo == "deflate" => decompress_zlib(&raw)?,
         Some(algo) => return Err(PayloadExtractorError::UnsupportedCompression(algo)),
         None => raw.clone(),
     };
 
     match serde_json::from_slice::<Value>(&decoded) {
         Ok(value) => convert_embedded_value(value),
-        Err(mut err) => {
+        Err(err) => {
             if compression.is_none() {
                 if let Ok(zlib_decoded) = decompress_zlib(&raw) {
                     if let Ok(value) = serde_json::from_slice::<Value>(&zlib_decoded) {
@@ -624,9 +675,28 @@ fn decode_data_string(
                 }
             }
 
-            err = serde_json::from_slice::<Value>(&decoded).unwrap_err();
             Err(PayloadExtractorError::Json(err))
         }
+    }
+}
+
+fn decode_compressed_body(
+    body: &[u8],
+    compression: &str,
+) -> Result<Vec<u8>, PayloadExtractorError> {
+    match compression.to_ascii_lowercase().as_str() {
+        "base64" => BASE64_STANDARD.decode(body).map_err(|err| {
+            PayloadExtractorError::Json(serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                err,
+            )))
+        }),
+        "gzip" => decompress_gzip(body),
+        "gzip-js" => decompress_gzip(body).or_else(|_| decompress_zlib(body)),
+        "zlib" | "deflate" => decompress_zlib(body),
+        other => Err(PayloadExtractorError::UnsupportedCompression(
+            other.to_string(),
+        )),
     }
 }
 
@@ -773,10 +843,7 @@ mod tests {
     use std::{io::Write, sync::Arc, time::Duration};
 
     use crate::{
-        models::CaptureRequest,
-        pipeline::PipelineClient,
-        persons::NoopPersonStore,
-        AppState,
+        models::CaptureRequest, persons::NoopPersonStore, pipeline::PipelineClient, AppState,
     };
     use reqwest::Url;
 
@@ -913,7 +980,7 @@ mod tests {
         })
         .to_string();
 
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(event.as_bytes()).unwrap();
         let compressed = encoder.finish().unwrap();
         let encoded = BASE64_STANDARD.encode(compressed);
@@ -936,6 +1003,65 @@ mod tests {
         assert_eq!(payload.items[0].event, "compressed-form");
         assert_eq!(payload.items[0].distinct_id, "form-user");
         assert_eq!(payload.items[0].api_key.as_deref(), Some("phc_compressed"));
+    }
+
+    #[tokio::test]
+    async fn parses_raw_gzip_js_payload_from_query() {
+        let body = json!({
+            "event": "raw-gzip-js",
+            "distinct_id": "raw-user",
+            "api_key": "phc_raw_gzip_js"
+        })
+        .to_string();
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(body.as_bytes()).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let request = Request::builder()
+            .uri("/capture?compression=gzip-js")
+            .header(header::CONTENT_TYPE, "text/plain")
+            .body(Body::from(compressed))
+            .unwrap();
+
+        let state = test_state();
+        let payload: PostHogPayload<CaptureRequest> =
+            PostHogPayload::from_request(request, &state).await.unwrap();
+
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "raw-gzip-js");
+        assert_eq!(payload.items[0].distinct_id, "raw-user");
+        assert_eq!(payload.items[0].api_key.as_deref(), Some("phc_raw_gzip_js"));
+    }
+
+    #[tokio::test]
+    async fn parses_base64_form_payload_from_query_compression() {
+        let event = json!({
+            "event": "query-base64",
+            "distinct_id": "base64-user",
+        })
+        .to_string();
+
+        let encoded = BASE64_STANDARD.encode(event);
+        let body = format!("data={}&api_key=phc_query_base64", encoded);
+
+        let request = Request::builder()
+            .uri("/capture?compression=base64")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body(Body::from(body))
+            .unwrap();
+
+        let state = test_state();
+        let payload: PostHogPayload<CaptureRequest> =
+            PostHogPayload::from_request(request, &state).await.unwrap();
+
+        assert_eq!(payload.items.len(), 1);
+        assert_eq!(payload.items[0].event, "query-base64");
+        assert_eq!(payload.items[0].distinct_id, "base64-user");
+        assert_eq!(
+            payload.items[0].api_key.as_deref(),
+            Some("phc_query_base64")
+        );
     }
 
     #[tokio::test]
