@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::fs;
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -17,6 +17,20 @@ use tokio::process::{Child, Command};
 struct PersonDebugResponse {
     canonical_id: String,
     record: Option<Value>,
+}
+
+struct WranglerDev {
+    child: Child,
+    stdout_path: PathBuf,
+    stderr_path: PathBuf,
+}
+
+impl WranglerDev {
+    fn logs(&self) -> String {
+        let stdout = read_log(&self.stdout_path);
+        let stderr = read_log(&self.stderr_path);
+        format!("wrangler stdout:\n{stdout}\nwrangler stderr:\n{stderr}")
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -31,7 +45,7 @@ async fn durable_object_person_updates_apply() -> Result<(), Box<dyn std::error:
         write_wrangler_config(temp_dir.path(), &pipeline_endpoint.to_string(), debug_token)?;
     patch_worker_bundle()?;
 
-    let mut wrangler = spawn_wrangler_dev(&config_path, port)?;
+    let mut wrangler = spawn_wrangler_dev(&config_path, port, temp_dir.path())?;
     wait_for_health(port, &mut wrangler).await?;
 
     let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
@@ -102,7 +116,7 @@ fn reserve_port() -> Result<u16, Box<dyn std::error::Error>> {
 }
 
 fn write_wrangler_config(
-    dir: &std::path::Path,
+    dir: &Path,
     pipeline_endpoint: &str,
     debug_token: &str,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -169,7 +183,13 @@ export * from "./index.mjs";
 fn spawn_wrangler_dev(
     config_path: &PathBuf,
     port: u16,
-) -> Result<Child, Box<dyn std::error::Error>> {
+    log_dir: &Path,
+) -> Result<WranglerDev, Box<dyn std::error::Error>> {
+    let stdout_path = log_dir.join("wrangler.stdout.log");
+    let stderr_path = log_dir.join("wrangler.stderr.log");
+    let stdout = fs::File::create(&stdout_path)?;
+    let stderr = fs::File::create(&stderr_path)?;
+
     let child = Command::new("bunx")
         .arg("wrangler")
         .arg("dev")
@@ -183,16 +203,20 @@ fn spawn_wrangler_dev(
         .arg("--log-level")
         .arg("error")
         .env("WRANGLER_SEND_METRICS", "false")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
         .spawn()?;
 
-    Ok(child)
+    Ok(WranglerDev {
+        child,
+        stdout_path,
+        stderr_path,
+    })
 }
 
 async fn wait_for_health(
     port: u16,
-    wrangler: &mut Child,
+    wrangler: &mut WranglerDev,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::builder().timeout(Duration::from_secs(2)).build()?;
     let url = format!("http://127.0.0.1:{port}/healthz");
@@ -200,10 +224,12 @@ async fn wait_for_health(
     let mut last_failure = String::from("no response yet");
 
     while tokio::time::Instant::now() < deadline {
-        if let Some(status) = wrangler.try_wait()? {
-            return Err(
-                format!("wrangler dev exited before health check succeeded: {status}").into(),
-            );
+        if let Some(status) = wrangler.child.try_wait()? {
+            return Err(format!(
+                "wrangler dev exited before health check succeeded: {status}\n{}",
+                wrangler.logs()
+            )
+            .into());
         }
 
         match client.get(&url).send().await {
@@ -221,11 +247,27 @@ async fn wait_for_health(
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    if let Some(status) = wrangler.try_wait()? {
-        return Err(format!("wrangler dev exited before health check succeeded: {status}").into());
+    if let Some(status) = wrangler.child.try_wait()? {
+        return Err(format!(
+            "wrangler dev exited before health check succeeded: {status}\n{}",
+            wrangler.logs()
+        )
+        .into());
     }
 
-    Err(format!("timed out after 90s waiting for wrangler dev at {url}: {last_failure}").into())
+    Err(format!(
+        "timed out after 90s waiting for wrangler dev at {url}: {last_failure}\n{}",
+        wrangler.logs()
+    )
+    .into())
+}
+
+fn read_log(path: &Path) -> String {
+    match fs::read_to_string(path) {
+        Ok(contents) if contents.trim().is_empty() => "<empty>".to_string(),
+        Ok(contents) => contents,
+        Err(err) => format!("<failed to read {}: {err}>", path.display()),
+    }
 }
 
 async fn fetch_person(
@@ -253,10 +295,10 @@ async fn cleanup_pipeline(pipeline_handle: tokio::task::JoinHandle<()>) {
     let _ = pipeline_handle.await;
 }
 
-async fn shutdown_wrangler(child: &mut Child) {
-    let _ = child.kill().await;
+async fn shutdown_wrangler(wrangler: &mut WranglerDev) {
+    let _ = wrangler.child.kill().await;
 }
 
-async fn cleanup_wrangler(child: &mut Child) {
-    let _ = child.wait().await;
+async fn cleanup_wrangler(wrangler: &mut WranglerDev) {
+    let _ = wrangler.child.wait().await;
 }
