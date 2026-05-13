@@ -4,8 +4,9 @@ mod helpers;
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use chrono::Utc;
 use helpers::{
-    cleanup, spawn_app_with_options, spawn_app_with_runtime_options, spawn_pipeline_stub,
-    wait_for_events,
+    cleanup, spawn_app_with_options, spawn_app_with_options_and_debug,
+    spawn_app_with_options_debug_and_person_pipeline, spawn_app_with_runtime_options,
+    spawn_pipeline_stub, wait_for_events,
 };
 use hmac::{Hmac, Mac};
 use hogflare::{feature_flags::FeatureFlagStore, groups::GroupTypeMap};
@@ -656,4 +657,347 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     cleanup(server_handle, pipeline_handle).await;
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn anonymous_identify_transition_enriches_events_and_person(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let debug_token = "debug-transition-token";
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app_with_options_and_debug(
+        pipeline_endpoint,
+        None,
+        None,
+        None,
+        None,
+        Some(debug_token.to_string()),
+    )
+    .await?;
+    let base_url = format!("http://{}", address);
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+
+    let anon_capture = json!({
+        "event": "anon-pageview",
+        "distinct_id": "anon-transition-user",
+        "api_key": "phc_people_transition",
+        "properties": {
+            "$set": { "initial_referrer": "adwords", "anon_trait": "curious" },
+            "$set_once": { "first_seen_source": "landing-page" },
+            "page": "/landing"
+        }
+    });
+
+    client
+        .post(format!("{}/capture", base_url))
+        .json(&anon_capture)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let anon_events = wait_for_events(&mut pipeline_rx).await?;
+    let anon_event = anon_events
+        .first()
+        .expect("expected anonymous capture event");
+    assert_eq!(anon_event["event"], "anon-pageview");
+    assert_eq!(anon_event["distinct_id"], "anon-transition-user");
+    assert_eq!(anon_event["api_key"], "phc_people_transition");
+    let anon_person_id = anon_event["person_id"]
+        .as_str()
+        .expect("anonymous event should include person_id")
+        .to_string();
+    assert!(
+        anon_event["person_created_at"].as_str().is_some(),
+        "anonymous event should include person_created_at"
+    );
+    assert_eq!(
+        anon_event["person_properties"]["initial_referrer"],
+        "adwords"
+    );
+    assert_eq!(
+        anon_event["person_properties"]["first_seen_source"],
+        "landing-page"
+    );
+
+    let identify_payload = json!({
+        "distinct_id": "identified-transition-user",
+        "api_key": "phc_people_transition",
+        "properties": {
+            "$anon_distinct_id": "anon-transition-user",
+            "$set": {
+                "email": "transition@example.com",
+                "plan": "pro"
+            },
+            "$set_once": {
+                "signup_source": "product"
+            }
+        }
+    });
+
+    client
+        .post(format!("{}/identify", base_url))
+        .json(&identify_payload)
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let identify_events = wait_for_events(&mut pipeline_rx).await?;
+    let identify_event = identify_events.first().expect("expected identify event");
+    assert_eq!(identify_event["event"], "$identify");
+    assert_eq!(identify_event["distinct_id"], "identified-transition-user");
+    assert_eq!(identify_event["person_id"], anon_person_id);
+    assert_eq!(
+        identify_event["person_properties"]["email"],
+        "transition@example.com"
+    );
+    assert_eq!(identify_event["person_properties"]["plan"], "pro");
+    assert_eq!(
+        identify_event["person_properties"]["initial_referrer"],
+        "adwords"
+    );
+    assert_eq!(
+        identify_event["person_properties"]["first_seen_source"],
+        "landing-page"
+    );
+    assert_eq!(
+        identify_event["person_properties"]["signup_source"],
+        "product"
+    );
+
+    client
+        .post(format!("{}/capture", base_url))
+        .json(&json!({
+            "event": "identified-action",
+            "distinct_id": "identified-transition-user",
+            "api_key": "phc_people_transition",
+            "properties": { "button": "checkout" }
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let identified_events = wait_for_events(&mut pipeline_rx).await?;
+    let identified_event = identified_events
+        .first()
+        .expect("expected identified capture event");
+    assert_eq!(identified_event["event"], "identified-action");
+    assert_eq!(
+        identified_event["distinct_id"],
+        "identified-transition-user"
+    );
+    assert_eq!(identified_event["person_id"], anon_person_id);
+    assert_eq!(
+        identified_event["person_properties"]["email"],
+        "transition@example.com"
+    );
+    assert_eq!(identified_event["person_properties"]["plan"], "pro");
+    assert_eq!(
+        identified_event["person_properties"]["initial_referrer"],
+        "adwords"
+    );
+
+    let person_response = client
+        .get(format!("{}/__debug/person/anon-transition-user", base_url))
+        .header("x-hogflare-debug-token", debug_token)
+        .send()
+        .await?;
+    assert_eq!(person_response.status(), StatusCode::OK);
+    let person: Value = person_response.json().await?;
+    assert_eq!(person["canonical_id"], "identified-transition-user");
+    assert_eq!(person["record"]["uuid"], anon_person_id);
+    assert_eq!(
+        person["record"]["properties"]["email"],
+        "transition@example.com"
+    );
+    assert_eq!(person["record"]["properties"]["plan"], "pro");
+    assert_eq!(
+        person["record"]["properties"]["initial_referrer"],
+        "adwords"
+    );
+    assert_eq!(
+        person["record"]["properties_set_once"]["first_seen_source"],
+        "landing-page"
+    );
+    assert_eq!(
+        person["record"]["properties_set_once"]["signup_source"],
+        "product"
+    );
+    let distinct_ids = person["record"]["distinct_ids"]
+        .as_array()
+        .expect("person should include distinct_ids");
+    assert!(distinct_ids.contains(&Value::String("anon-transition-user".to_string())));
+    assert!(distinct_ids.contains(&Value::String("identified-transition-user".to_string())));
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn persons_pipeline_receives_anon_to_identified_snapshots(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let debug_token = "debug-persons-pipeline-token";
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (persons_endpoint, mut persons_rx, persons_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app_with_options_debug_and_person_pipeline(
+        pipeline_endpoint,
+        Some(persons_endpoint),
+        None,
+        None,
+        None,
+        None,
+        Some(debug_token.to_string()),
+    )
+    .await?;
+    let base_url = format!("http://{}", address);
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+
+    client
+        .post(format!("{}/capture", base_url))
+        .json(&json!({
+            "event": "persons-anon-capture",
+            "distinct_id": "persons-anon-id",
+            "api_key": "phc_persons_pipeline",
+            "properties": {
+                "$set": { "initial_referrer": "paid-search" },
+                "$set_once": { "first_seen_source": "landing" },
+                "page": "/start"
+            }
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let anon_people = wait_for_events(&mut persons_rx).await?;
+    let anon_events = wait_for_events(&mut pipeline_rx).await?;
+    let anon_person = anon_people
+        .first()
+        .expect("expected anonymous person snapshot");
+    let anon_event = anon_events.first().expect("expected anonymous event");
+    assert_eq!(anon_person["operation"], "capture");
+    assert_eq!(anon_person["canonical_distinct_id"], "persons-anon-id");
+    assert_eq!(anon_person["api_key"], "phc_persons_pipeline");
+    assert_eq!(anon_person["source_event_uuid"], anon_event["uuid"]);
+    let person_id = anon_person["person_id"]
+        .as_str()
+        .expect("person snapshot should include person_id")
+        .to_string();
+    assert_eq!(anon_event["person_id"], person_id);
+    assert_json_array_contains(&anon_person["distinct_ids"], "persons-anon-id");
+    assert_eq!(anon_person["properties"]["initial_referrer"], "paid-search");
+    assert_eq!(
+        anon_person["properties_set_once"]["first_seen_source"],
+        "landing"
+    );
+    assert_eq!(
+        anon_person["merged_properties"]["initial_referrer"],
+        "paid-search"
+    );
+    assert_eq!(
+        anon_person["merged_properties"]["first_seen_source"],
+        "landing"
+    );
+
+    client
+        .post(format!("{}/identify", base_url))
+        .json(&json!({
+            "distinct_id": "persons-identified-id",
+            "api_key": "phc_persons_pipeline",
+            "properties": {
+                "$anon_distinct_id": "persons-anon-id",
+                "$set": {
+                    "email": "persons@example.com",
+                    "plan": "pro"
+                },
+                "$set_once": {
+                    "signup_source": "checkout"
+                }
+            }
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let identified_people = wait_for_events(&mut persons_rx).await?;
+    let identify_events = wait_for_events(&mut pipeline_rx).await?;
+    let identified_person = identified_people
+        .first()
+        .expect("expected identified person snapshot");
+    let identify_event = identify_events.first().expect("expected identify event");
+    assert_eq!(identified_person["operation"], "identify");
+    assert_eq!(
+        identified_person["canonical_distinct_id"],
+        "persons-identified-id"
+    );
+    assert_eq!(identified_person["person_id"], person_id);
+    assert_eq!(
+        identified_person["source_event_uuid"],
+        identify_event["uuid"]
+    );
+    assert_json_array_contains(&identified_person["distinct_ids"], "persons-anon-id");
+    assert_json_array_contains(&identified_person["distinct_ids"], "persons-identified-id");
+    assert_eq!(
+        identified_person["properties"]["email"],
+        "persons@example.com"
+    );
+    assert_eq!(identified_person["properties"]["plan"], "pro");
+    assert_eq!(
+        identified_person["properties"]["initial_referrer"],
+        "paid-search"
+    );
+    assert_eq!(
+        identified_person["properties_set_once"]["first_seen_source"],
+        "landing"
+    );
+    assert_eq!(
+        identified_person["properties_set_once"]["signup_source"],
+        "checkout"
+    );
+    assert_eq!(
+        identified_person["merged_properties"]["signup_source"],
+        "checkout"
+    );
+
+    client
+        .post(format!("{}/capture", base_url))
+        .json(&json!({
+            "event": "persons-identified-capture",
+            "distinct_id": "persons-identified-id",
+            "api_key": "phc_persons_pipeline",
+            "properties": { "button": "pay" }
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let final_people = wait_for_events(&mut persons_rx).await?;
+    let final_events = wait_for_events(&mut pipeline_rx).await?;
+    let final_person = final_people
+        .first()
+        .expect("expected final person snapshot");
+    let final_event = final_events.first().expect("expected final event");
+    assert_eq!(final_person["operation"], "capture");
+    assert_eq!(final_person["person_id"], person_id);
+    assert_eq!(final_person["source_event_uuid"], final_event["uuid"]);
+    assert_eq!(
+        final_person["canonical_distinct_id"],
+        "persons-identified-id"
+    );
+    assert_eq!(
+        final_person["merged_properties"]["email"],
+        "persons@example.com"
+    );
+    assert_json_array_contains(&final_person["distinct_ids"], "persons-anon-id");
+    assert_json_array_contains(&final_person["distinct_ids"], "persons-identified-id");
+
+    cleanup(server_handle, pipeline_handle).await;
+    persons_handle.abort();
+    let _ = persons_handle.await;
+    Ok(())
+}
+
+fn assert_json_array_contains(value: &Value, expected: &str) {
+    let values = value.as_array().expect("expected JSON array");
+    assert!(
+        values.contains(&Value::String(expected.to_string())),
+        "expected {values:?} to contain {expected:?}"
+    );
 }

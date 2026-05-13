@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use helpers::{
     cleanup, collect_events_until, spawn_app, spawn_app_with_options,
-    spawn_app_with_runtime_options, spawn_pipeline_stub, start_docker_pipeline,
-    stop_docker_pipeline, wait_for_events, wait_for_pipeline_events,
+    spawn_app_with_options_and_debug, spawn_app_with_runtime_options, spawn_pipeline_stub,
+    start_docker_pipeline, stop_docker_pipeline, wait_for_events, wait_for_pipeline_events,
 };
 use hogflare::groups::GroupTypeMap;
 use reqwest::Client;
@@ -40,6 +40,7 @@ async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std
     assert_eq!(event["source"], "posthog");
     assert_eq!(event["event"], "js-integration-test");
     assert_eq!(event["distinct_id"], "js-integration-user");
+    assert_eq!(event["api_key"], "phc_test_integration_key");
 
     let properties = event
         .get("properties")
@@ -92,6 +93,7 @@ async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error:
 
             assert_eq!(event["distinct_id"], "js-integration-user");
             assert_eq!(event["source"], "posthog");
+            assert_eq!(event["api_key"], "phc_test_integration_key");
             assert_eq!(
                 event["properties"]["framework"].as_str(),
                 Some("integration"),
@@ -138,6 +140,7 @@ async fn posthog_js_identify_is_forwarded_to_pipeline() -> Result<(), Box<dyn st
 
     assert_eq!(event["source"], "posthog");
     assert_eq!(event["distinct_id"], "identified-user-123");
+    assert_eq!(event["api_key"], "phc_test_integration_key");
 
     let person_props = event
         .get("person_properties")
@@ -215,6 +218,141 @@ async fn posthog_js_identify_aliases_anonymous_id_with_sdk_payload(
     assert_eq!(
         snapshot["record"]["properties"]["email"],
         "sdk-identify@example.com"
+    );
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posthog_js_identify_transitions_anonymous_person() -> Result<(), Box<dyn std::error::Error>>
+{
+    let debug_token = "debug-js-transition-token";
+    let anon_id = "js-anon-transition-user";
+    let identified_id = "js-identified-transition-user";
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app_with_options_and_debug(
+        pipeline_endpoint,
+        None,
+        None,
+        None,
+        None,
+        Some(debug_token.to_string()),
+    )
+    .await?;
+
+    let status = Command::new("bun")
+        .arg("run")
+        .arg("posthog_identify_transition.js")
+        .current_dir("tests/js_client")
+        .env("HOGFLARE_HOST", format!("http://{}", address))
+        .env("HOGFLARE_API_KEY", "phc_test_integration_key")
+        .env("HOGFLARE_DISTINCT_ID", anon_id)
+        .env("HOGFLARE_IDENTIFIED_ID", identified_id)
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(format!("posthog transition script exited with status {status:?}").into());
+    }
+
+    let mut all_events: Vec<Value> = Vec::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while all_events.len() < 3 && tokio::time::Instant::now() < deadline {
+        if let Ok(events) = tokio::time::timeout(
+            Duration::from_millis(500),
+            wait_for_events(&mut pipeline_rx),
+        )
+        .await
+        {
+            if let Ok(batch) = events {
+                all_events.extend(batch);
+            }
+        }
+    }
+
+    let find_event = |event_name: &str| -> &Value {
+        all_events
+            .iter()
+            .find(|event| event["event"] == event_name)
+            .unwrap_or_else(|| panic!("missing event {event_name}: {all_events:?}"))
+    };
+
+    let anon_event = find_event("js-anon-pageview");
+    assert_eq!(anon_event["distinct_id"], anon_id);
+    assert_eq!(anon_event["api_key"], "phc_test_integration_key");
+    let person_id = anon_event["person_id"]
+        .as_str()
+        .expect("anonymous SDK event should include person_id");
+    assert_eq!(
+        anon_event["person_properties"]["initial_referrer"],
+        "adwords"
+    );
+    assert_eq!(
+        anon_event["person_properties"]["first_seen_source"],
+        "landing-page"
+    );
+
+    let identify_event = find_event("$identify");
+    assert_eq!(identify_event["distinct_id"], identified_id);
+    assert_eq!(identify_event["api_key"], "phc_test_integration_key");
+    assert_eq!(identify_event["person_id"], person_id);
+    assert_eq!(
+        identify_event["person_properties"]["email"],
+        "js-transition@example.com"
+    );
+    assert_eq!(identify_event["person_properties"]["plan"], "pro");
+    assert_eq!(
+        identify_event["person_properties"]["initial_referrer"],
+        "adwords"
+    );
+    assert_eq!(
+        identify_event["person_properties"]["first_seen_source"],
+        "landing-page"
+    );
+    assert_eq!(
+        identify_event["person_properties"]["signup_source"],
+        "product"
+    );
+
+    let identified_event = find_event("js-identified-action");
+    assert_eq!(identified_event["distinct_id"], identified_id);
+    assert_eq!(identified_event["api_key"], "phc_test_integration_key");
+    assert_eq!(identified_event["person_id"], person_id);
+    assert_eq!(
+        identified_event["person_properties"]["email"],
+        "js-transition@example.com"
+    );
+    assert_eq!(
+        identified_event["person_properties"]["initial_referrer"],
+        "adwords"
+    );
+
+    let client = Client::builder().timeout(Duration::from_secs(2)).build()?;
+    let person_response = client
+        .get(format!("http://{}/__debug/person/{}", address, anon_id))
+        .header("x-hogflare-debug-token", debug_token)
+        .send()
+        .await?;
+    assert!(person_response.status().is_success());
+    let person: Value = person_response.json().await?;
+    assert_eq!(person["canonical_id"], identified_id);
+    assert_eq!(person["record"]["uuid"], person_id);
+    assert_eq!(
+        person["record"]["properties"]["email"],
+        "js-transition@example.com"
+    );
+    assert_eq!(
+        person["record"]["properties"]["initial_referrer"],
+        "adwords"
+    );
+    assert_eq!(
+        person["record"]["properties_set_once"]["first_seen_source"],
+        "landing-page"
+    );
+    assert_eq!(
+        person["record"]["properties_set_once"]["signup_source"],
+        "product"
     );
 
     cleanup(server_handle, pipeline_handle).await;

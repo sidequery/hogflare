@@ -75,6 +75,26 @@ pub async fn spawn_app_with_options(
     .await
 }
 
+pub async fn spawn_app_with_options_and_debug(
+    pipeline_endpoint: Url,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    feature_flags: Option<hogflare::feature_flags::FeatureFlagStore>,
+    person_debug_token: Option<String>,
+) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
+    spawn_app_with_runtime_options(
+        pipeline_endpoint,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        person_debug_token,
+        feature_flags,
+        hogflare::groups::GroupTypeMap::default(),
+    )
+    .await
+}
+
 pub async fn spawn_app_with_runtime_options(
     pipeline_endpoint: Url,
     decide_api_token: Option<String>,
@@ -84,7 +104,55 @@ pub async fn spawn_app_with_runtime_options(
     feature_flags: Option<hogflare::feature_flags::FeatureFlagStore>,
     group_type_map: hogflare::groups::GroupTypeMap,
 ) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
+    spawn_app_with_runtime_options_and_person_pipeline(
+        pipeline_endpoint,
+        None,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        person_debug_token,
+        feature_flags,
+        group_type_map,
+    )
+    .await
+}
+
+pub async fn spawn_app_with_options_debug_and_person_pipeline(
+    pipeline_endpoint: Url,
+    persons_pipeline_endpoint: Option<Url>,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    feature_flags: Option<hogflare::feature_flags::FeatureFlagStore>,
+    person_debug_token: Option<String>,
+) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
+    spawn_app_with_runtime_options_and_person_pipeline(
+        pipeline_endpoint,
+        persons_pipeline_endpoint,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        person_debug_token,
+        feature_flags,
+        hogflare::groups::GroupTypeMap::default(),
+    )
+    .await
+}
+
+pub async fn spawn_app_with_runtime_options_and_person_pipeline(
+    pipeline_endpoint: Url,
+    persons_pipeline_endpoint: Option<Url>,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    person_debug_token: Option<String>,
+    feature_flags: Option<hogflare::feature_flags::FeatureFlagStore>,
+    group_type_map: hogflare::groups::GroupTypeMap,
+) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
     let pipeline_client = PipelineClient::new(pipeline_endpoint, None, Duration::from_secs(5))?;
+    let persons_pipeline_client = persons_pipeline_endpoint
+        .map(|endpoint| PipelineClient::new(endpoint, None, Duration::from_secs(5)).map(Arc::new))
+        .transpose()?;
 
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
@@ -92,9 +160,10 @@ pub async fn spawn_app_with_runtime_options(
     let server_handle = tokio::spawn({
         let pipeline = Arc::new(pipeline_client);
         async move {
-            if let Err(err) = hogflare::serve_with_options(
+            if let Err(err) = hogflare::serve_with_person_pipeline(
                 listener,
                 pipeline,
+                persons_pipeline_client,
                 None,
                 Arc::new(hogflare::groups::MemoryGroupStore::new()),
                 group_type_map,

@@ -1,0 +1,24 @@
+{
+  "fields": [
+    { "name": "uuid", "type": "string", "required": true },
+    { "name": "team_id", "type": "int64", "required": false },
+    { "name": "source", "type": "string", "required": true },
+    { "name": "event", "type": "string", "required": true },
+    { "name": "distinct_id", "type": "string", "required": true },
+    { "name": "timestamp", "type": "timestamp", "required": false },
+    { "name": "created_at", "type": "timestamp", "required": true },
+    { "name": "properties", "type": "json", "required": false },
+    { "name": "context", "type": "json", "required": false },
+    { "name": "person_id", "type": "string", "required": false },
+    { "name": "person_created_at", "type": "timestamp", "required": false },
+    { "name": "person_properties", "type": "json", "required": false },
+    { "name": "group0", "type": "string", "required": false },
+    { "name": "group1", "type": "string", "required": false },
+    { "name": "group2", "type": "string", "required": false },
+    { "name": "group3", "type": "string", "required": false },
+    { "name": "group4", "type": "string", "required": false },
+    { "name": "group_properties", "type": "json", "required": false },
+    { "name": "api_key", "type": "string", "required": false },
+    { "name": "extra", "type": "json", "required": false }
+  ]
+}
