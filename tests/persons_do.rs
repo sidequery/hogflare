@@ -32,7 +32,7 @@ async fn durable_object_person_updates_apply() -> Result<(), Box<dyn std::error:
     patch_worker_bundle()?;
 
     let mut wrangler = spawn_wrangler_dev(&config_path, port)?;
-    wait_for_health(port).await?;
+    wait_for_health(port, &mut wrangler).await?;
 
     let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
     let base_url = format!("http://127.0.0.1:{port}");
@@ -190,20 +190,42 @@ fn spawn_wrangler_dev(
     Ok(child)
 }
 
-async fn wait_for_health(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    let client = Client::builder().timeout(Duration::from_secs(1)).build()?;
+async fn wait_for_health(
+    port: u16,
+    wrangler: &mut Child,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let client = Client::builder().timeout(Duration::from_secs(2)).build()?;
     let url = format!("http://127.0.0.1:{port}/healthz");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+    let mut last_failure = String::from("no response yet");
 
-    for _ in 0..60 {
-        if let Ok(resp) = client.get(&url).send().await {
-            if resp.status().is_success() {
-                return Ok(());
+    while tokio::time::Instant::now() < deadline {
+        if let Some(status) = wrangler.try_wait()? {
+            return Err(
+                format!("wrangler dev exited before health check succeeded: {status}").into(),
+            );
+        }
+
+        match client.get(&url).send().await {
+            Ok(resp) => {
+                if resp.status().is_success() {
+                    return Ok(());
+                }
+                last_failure = format!("last status {}", resp.status());
+            }
+            Err(err) => {
+                last_failure = err.to_string();
             }
         }
-        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    Err("timed out waiting for wrangler dev".into())
+    if let Some(status) = wrangler.try_wait()? {
+        return Err(format!("wrangler dev exited before health check succeeded: {status}").into());
+    }
+
+    Err(format!("timed out after 90s waiting for wrangler dev at {url}: {last_failure}").into())
 }
 
 async fn fetch_person(
