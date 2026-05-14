@@ -2,6 +2,8 @@ pub mod config;
 pub mod extractors;
 pub mod feature_flags;
 pub mod groups;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod importer;
 pub mod models;
 pub mod persons;
 pub mod pipeline;
