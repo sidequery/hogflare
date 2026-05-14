@@ -34,7 +34,7 @@ use persons::{
     alias_from_request, update_from_capture, update_from_engage, update_from_identify,
     NoopPersonStore, PersonAlias, PersonError, PersonStore, PersonUpdate,
 };
-use pipeline::{PipelineClient, PipelineError, PipelineEvent};
+use pipeline::{PersonPipelineRecord, PipelineClient, PipelineError, PipelineEvent};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -58,6 +58,7 @@ use tower_service::Service;
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) pipeline: Arc<PipelineClient>,
+    pub(crate) persons_pipeline: Option<Arc<PipelineClient>>,
     pub(crate) posthog_team_id: Option<i64>,
     pub(crate) decide_api_token: Option<String>,
     pub(crate) session_recording_endpoint: Option<String>,
@@ -157,6 +158,18 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
         config.pipeline_auth_token.clone(),
         config.pipeline_timeout,
     )?;
+    let persons_pipeline = config
+        .persons_pipeline_endpoint
+        .as_ref()
+        .map(|endpoint| {
+            PipelineClient::new(
+                endpoint.clone(),
+                config.persons_pipeline_auth_token.clone(),
+                config.pipeline_timeout,
+            )
+            .map(Arc::new)
+        })
+        .transpose()?;
 
     info!(
         endpoint = %config.pipeline_endpoint,
@@ -164,13 +177,22 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
         timeout_secs = config.pipeline_timeout.as_secs(),
         "pipeline client configured"
     );
+    if let Some(endpoint) = config.persons_pipeline_endpoint.as_ref() {
+        info!(
+            endpoint = %endpoint,
+            auth_configured = config.persons_pipeline_auth_token.is_some(),
+            timeout_secs = config.pipeline_timeout.as_secs(),
+            "persons pipeline client configured"
+        );
+    }
 
     let listener = TcpListener::bind(config.address).await?;
     info!(address = %config.address, "listening for requests");
 
-    serve_with_options(
+    serve_with_person_pipeline(
         listener,
         Arc::new(pipeline),
+        persons_pipeline,
         config.posthog_team_id,
         Arc::new(NoopGroupStore),
         GroupTypeMap::new(config.posthog_group_types.clone()),
@@ -216,14 +238,33 @@ pub async fn fetch(
             return Ok((StatusCode::INTERNAL_SERVER_ERROR, body).into_response());
         }
     };
+    let persons_pipeline = match config.persons_pipeline_endpoint.as_ref() {
+        Some(endpoint) => match PipelineClient::new(
+            endpoint.clone(),
+            config.persons_pipeline_auth_token.clone(),
+            config.pipeline_timeout,
+        ) {
+            Ok(client) => Some(Arc::new(client)),
+            Err(err) => {
+                error!(error = %err, "failed to create persons pipeline client");
+                let body = Json(ErrorResponse {
+                    status: 0,
+                    error: err.to_string(),
+                });
+                return Ok((StatusCode::INTERNAL_SERVER_ERROR, body).into_response());
+            }
+        },
+        None => None,
+    };
 
     let person_store: Arc<dyn PersonStore> = persons::store_from_env(&env, config.posthog_team_id);
     let group_store: Arc<dyn GroupStore> = groups::store_from_env(&env);
     let group_type_map = GroupTypeMap::new(config.posthog_group_types.clone());
     let feature_flags = Arc::new(config.feature_flags);
 
-    let mut router = build_router_with_options(
+    let mut router = build_router_with_person_pipeline(
         Arc::new(pipeline),
+        persons_pipeline,
         config.posthog_team_id,
         group_store,
         group_type_map,
@@ -265,8 +306,37 @@ pub fn build_router_with_options(
     feature_flags: Arc<FeatureFlagStore>,
     person_store: Arc<dyn PersonStore>,
 ) -> Router {
+    build_router_with_person_pipeline(
+        pipeline,
+        None,
+        posthog_team_id,
+        group_store,
+        group_type_map,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        person_debug_token,
+        feature_flags,
+        person_store,
+    )
+}
+
+pub fn build_router_with_person_pipeline(
+    pipeline: Arc<PipelineClient>,
+    persons_pipeline: Option<Arc<PipelineClient>>,
+    posthog_team_id: Option<i64>,
+    group_store: Arc<dyn GroupStore>,
+    group_type_map: GroupTypeMap,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    person_debug_token: Option<String>,
+    feature_flags: Arc<FeatureFlagStore>,
+    person_store: Arc<dyn PersonStore>,
+) -> Router {
     router(build_state(
         pipeline,
+        persons_pipeline,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -285,6 +355,7 @@ pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Resu
         listener,
         build_state(
             pipeline,
+            None,
             None,
             Arc::new(NoopGroupStore),
             GroupTypeMap::default(),
@@ -312,8 +383,39 @@ pub async fn serve_with_options(
     person_debug_token: Option<String>,
     feature_flags: Arc<FeatureFlagStore>,
 ) -> Result<(), RunError> {
+    serve_with_person_pipeline(
+        listener,
+        pipeline,
+        None,
+        posthog_team_id,
+        group_store,
+        group_type_map,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        person_debug_token,
+        feature_flags,
+    )
+    .await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn serve_with_person_pipeline(
+    listener: TcpListener,
+    pipeline: Arc<PipelineClient>,
+    persons_pipeline: Option<Arc<PipelineClient>>,
+    posthog_team_id: Option<i64>,
+    group_store: Arc<dyn GroupStore>,
+    group_type_map: GroupTypeMap,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    person_debug_token: Option<String>,
+    feature_flags: Arc<FeatureFlagStore>,
+) -> Result<(), RunError> {
     let state = build_state(
         pipeline,
+        persons_pipeline,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -359,6 +461,7 @@ fn router(state: AppState) -> Router {
 
 fn build_state(
     pipeline: Arc<PipelineClient>,
+    persons_pipeline: Option<Arc<PipelineClient>>,
     posthog_team_id: Option<i64>,
     group_store: Arc<dyn GroupStore>,
     group_type_map: GroupTypeMap,
@@ -371,6 +474,7 @@ fn build_state(
 ) -> AppState {
     AppState {
         pipeline,
+        persons_pipeline,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -413,6 +517,7 @@ async fn capture(
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
     let mut events = Vec::new();
+    let mut person_records = Vec::new();
 
     for item in payload.items {
         if item.event == "$groupidentify" {
@@ -479,16 +584,17 @@ async fn capture(
         };
 
         let (person_id, person_created_at, person_properties) = person_fields(&snapshot);
-        events.push(
-            PipelineEvent::from_capture(item)
-                .with_team_id(state.posthog_team_id)
-                .with_person(person_id, person_created_at, person_properties)
-                .with_groups(group_slots, group_properties)
-                .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment),
-        );
+        let event = PipelineEvent::from_capture(item)
+            .with_team_id(state.posthog_team_id)
+            .with_person(person_id, person_created_at, person_properties)
+            .with_groups(group_slots, group_properties)
+            .with_sent_at(sent_at.clone())
+            .with_enrichment(enrichment);
+        push_person_record(&mut person_records, &snapshot, "capture", &event);
+        events.push(event);
     }
 
+    send_person_records(&state, person_records).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -538,35 +644,21 @@ async fn browser_capture(
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
     let mut events = Vec::new();
+    let mut person_records = Vec::new();
 
     for payload in payload.items {
-        let api_key = payload.token.clone().or(payload.api_key.clone());
+        let api_key = payload
+            .token
+            .clone()
+            .or(payload.api_key.clone())
+            .or_else(|| api_key_from_browser_properties(payload.properties.as_ref()));
 
         let distinct_id = browser_distinct_id(&payload)
             .ok_or_else(|| AppError::InvalidPayload("missing distinct_id".into()))?;
 
         let event = if payload.event == "$identify" {
             let identify_req = browser_identify_request(payload, api_key, distinct_id);
-            if let Some(anon) = identify_req
-                .anon_distinct_id
-                .clone()
-                .or_else(|| {
-                    identify_req
-                        .properties
-                        .as_ref()
-                        .and_then(Value::as_object)
-                        .and_then(|props| props.get("$anon_distinct_id"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-                .or_else(|| {
-                    identify_req
-                        .extra
-                        .get("$anon_distinct_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                })
-            {
+            if let Some(anon) = anon_distinct_id_from_identify(&identify_req) {
                 if anon != identify_req.distinct_id {
                     state
                         .person_store
@@ -686,16 +778,24 @@ async fn browser_capture(
             .map(person_fields)
             .unwrap_or((None, None, None));
 
-        events.push(
-            event
-                .with_team_id(state.posthog_team_id)
-                .with_person(person_id, person_created_at, person_properties)
-                .with_groups(group_slots, group_properties)
-                .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment),
-        );
+        let event = event
+            .with_team_id(state.posthog_team_id)
+            .with_person(person_id, person_created_at, person_properties)
+            .with_groups(group_slots, group_properties)
+            .with_sent_at(sent_at.clone())
+            .with_enrichment(enrichment);
+        if let Some(snapshot) = snapshot.as_ref() {
+            let operation = if event.event == "$identify" {
+                "identify"
+            } else {
+                "capture"
+            };
+            push_person_record(&mut person_records, snapshot, operation, &event);
+        }
+        events.push(event);
     }
 
+    send_person_records(&state, person_records).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -709,26 +809,10 @@ async fn identify(
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
     let mut events = Vec::new();
+    let mut person_records = Vec::new();
 
     for item in payload.items {
-        if let Some(anon) = item
-            .anon_distinct_id
-            .clone()
-            .or_else(|| {
-                item.properties
-                    .as_ref()
-                    .and_then(Value::as_object)
-                    .and_then(|props| props.get("$anon_distinct_id"))
-                    .and_then(Value::as_str)
-                    .map(|value| value.to_string())
-            })
-            .or_else(|| {
-                item.extra
-                    .get("$anon_distinct_id")
-                    .and_then(Value::as_str)
-                    .map(|value| value.to_string())
-            })
-        {
+        if let Some(anon) = anon_distinct_id_from_identify(&item) {
             if anon != item.distinct_id {
                 state
                     .person_store
@@ -758,16 +842,17 @@ async fn identify(
         };
 
         let (person_id, person_created_at, person_properties) = person_fields(&snapshot);
-        events.push(
-            PipelineEvent::from_identify(item)
-                .with_team_id(state.posthog_team_id)
-                .with_person(person_id, person_created_at, person_properties)
-                .with_groups(group_slots, group_properties)
-                .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment),
-        );
+        let event = PipelineEvent::from_identify(item)
+            .with_team_id(state.posthog_team_id)
+            .with_person(person_id, person_created_at, person_properties)
+            .with_groups(group_slots, group_properties)
+            .with_sent_at(sent_at.clone())
+            .with_enrichment(enrichment);
+        push_person_record(&mut person_records, &snapshot, "identify", &event);
+        events.push(event);
     }
 
+    send_person_records(&state, person_records).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -784,8 +869,10 @@ async fn batch(
     let items = convert_batch(payload.batch, shared_api_key).map_err(AppError::InvalidPayload)?;
 
     let mut events = Vec::new();
+    let mut person_records = Vec::new();
 
     for item in items {
+        let operation = item.kind.person_operation();
         if let Some(alias) = item.alias {
             let snapshot = state.person_store.apply_alias(alias).await?;
             let (person_id, person_created_at, person_properties) = person_fields(&snapshot);
@@ -796,6 +883,7 @@ async fn batch(
                 .with_groups([None, None, None, None, None], None)
                 .with_sent_at(sent_at.clone())
                 .with_enrichment(enrichment);
+            push_person_record(&mut person_records, &snapshot, operation, &event);
             events.push(event);
             continue;
         }
@@ -873,9 +961,11 @@ async fn batch(
             .with_groups(group_slots, group_properties)
             .with_sent_at(sent_at.clone())
             .with_enrichment(enrichment);
+        push_person_record(&mut person_records, &snapshot, operation, &event);
         events.push(event);
     }
 
+    send_person_records(&state, person_records).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -920,6 +1010,7 @@ async fn alias(
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
     let mut events = Vec::new();
+    let mut person_records = Vec::new();
 
     for item in payload.items {
         let snapshot = state
@@ -927,16 +1018,17 @@ async fn alias(
             .apply_alias(alias_from_request(&item))
             .await?;
         let (person_id, person_created_at, person_properties) = person_fields(&snapshot);
-        events.push(
-            PipelineEvent::from_alias(item)
-                .with_team_id(state.posthog_team_id)
-                .with_person(person_id, person_created_at, person_properties)
-                .with_groups([None, None, None, None, None], None)
-                .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment),
-        );
+        let event = PipelineEvent::from_alias(item)
+            .with_team_id(state.posthog_team_id)
+            .with_person(person_id, person_created_at, person_properties)
+            .with_groups([None, None, None, None, None], None)
+            .with_sent_at(sent_at.clone())
+            .with_enrichment(enrichment);
+        push_person_record(&mut person_records, &snapshot, "alias", &event);
+        events.push(event);
     }
 
+    send_person_records(&state, person_records).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -950,6 +1042,7 @@ async fn engage(
     let sent_at = payload.sent_at.clone();
     let enrichment = enrichment.properties();
     let mut events = Vec::new();
+    let mut person_records = Vec::new();
 
     for item in payload.items {
         let update = update_from_engage(&item);
@@ -998,16 +1091,17 @@ async fn engage(
         };
 
         let (person_id, person_created_at, person_properties) = person_fields(&snapshot);
-        events.push(
-            PipelineEvent::from_engage(item)
-                .with_team_id(state.posthog_team_id)
-                .with_person(person_id, person_created_at, person_properties)
-                .with_groups(group_slots, group_properties)
-                .with_sent_at(sent_at.clone())
-                .with_enrichment(enrichment),
-        );
+        let event = PipelineEvent::from_engage(item)
+            .with_team_id(state.posthog_team_id)
+            .with_person(person_id, person_created_at, person_properties)
+            .with_groups(group_slots, group_properties)
+            .with_sent_at(sent_at.clone())
+            .with_enrichment(enrichment);
+        push_person_record(&mut person_records, &snapshot, "engage", &event);
+        events.push(event);
     }
 
+    send_person_records(&state, person_records).await?;
     state.pipeline.send(events).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -1183,6 +1277,13 @@ async fn session_recording(
         .with_sent_at(sent_at)
         .with_enrichment(enrichment.properties());
 
+    send_person_records(
+        &state,
+        PersonPipelineRecord::from_snapshot(&snapshot, "session_recording", &event)
+            .into_iter()
+            .collect(),
+    )
+    .await?;
     state.pipeline.send(vec![event]).await?;
     Ok(Json(PostHogResponse::success()))
 }
@@ -1383,6 +1484,32 @@ fn person_fields(
         ),
         None => (None, None, None),
     }
+}
+
+fn push_person_record(
+    records: &mut Vec<PersonPipelineRecord>,
+    snapshot: &persons::PersonSnapshot,
+    operation: &str,
+    event: &PipelineEvent,
+) {
+    if let Some(record) = PersonPipelineRecord::from_snapshot(snapshot, operation, event) {
+        records.push(record);
+    }
+}
+
+async fn send_person_records(
+    state: &AppState,
+    records: Vec<PersonPipelineRecord>,
+) -> Result<(), AppError> {
+    if records.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(pipeline) = state.persons_pipeline.as_ref() {
+        pipeline.send_records(records).await?;
+    }
+
+    Ok(())
 }
 
 fn extract_groups(properties: &Option<Value>) -> Option<serde_json::Map<String, Value>> {
@@ -1623,6 +1750,18 @@ enum BatchItemKind {
     GroupIdentify,
 }
 
+impl BatchItemKind {
+    fn person_operation(&self) -> &'static str {
+        match self {
+            BatchItemKind::Capture => "capture",
+            BatchItemKind::Identify => "identify",
+            BatchItemKind::Alias => "alias",
+            BatchItemKind::Engage => "engage",
+            BatchItemKind::GroupIdentify => "group_identify",
+        }
+    }
+}
+
 struct BatchItem {
     #[allow(dead_code)]
     kind: BatchItemKind,
@@ -1773,7 +1912,7 @@ fn convert_batch_item(
             .map(|request| {
                 let update = update_from_identify(&request);
                 let groups = extract_groups(&request.properties);
-                let anon_distinct_id = request.anon_distinct_id.clone();
+                let anon_distinct_id = anon_distinct_id_from_identify(&request);
                 BatchItem {
                     kind: BatchItemKind::Identify,
                     event: PipelineEvent::from_identify(request),
@@ -1878,4 +2017,45 @@ fn convert_batch_item(
             }
         })
         .map_err(|err| format!("invalid capture event: {err}"))
+}
+
+fn api_key_from_browser_properties(properties: Option<&Value>) -> Option<String> {
+    properties.and_then(|props| {
+        props
+            .get("token")
+            .or_else(|| props.get("api_key"))
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(String::from)
+    })
+}
+
+fn anon_distinct_id_from_identify(request: &IdentifyRequest) -> Option<String> {
+    anon_distinct_id_from_parts(
+        request.anon_distinct_id.as_deref(),
+        request.properties.as_ref(),
+        &request.extra,
+    )
+}
+
+fn anon_distinct_id_from_parts(
+    explicit: Option<&str>,
+    properties: Option<&Value>,
+    extra: &std::collections::HashMap<String, Value>,
+) -> Option<String> {
+    explicit
+        .map(str::to_string)
+        .or_else(|| {
+            properties
+                .and_then(Value::as_object)
+                .and_then(|props| props.get("$anon_distinct_id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            extra
+                .get("$anon_distinct_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
 }

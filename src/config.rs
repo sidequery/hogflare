@@ -13,6 +13,8 @@ pub struct Config {
     pub address: SocketAddr,
     pub pipeline_endpoint: Url,
     pub pipeline_auth_token: Option<String>,
+    pub persons_pipeline_endpoint: Option<Url>,
+    pub persons_pipeline_auth_token: Option<String>,
     pub pipeline_timeout: Duration,
     pub posthog_team_id: Option<i64>,
     pub posthog_group_types: [Option<String>; 5],
@@ -69,6 +71,30 @@ impl Config {
                     .ok()
                     .map(|var| var.to_string())
             });
+
+        let persons_pipeline_endpoint = match env.var("CLOUDFLARE_PERSONS_PIPELINE_ENDPOINT") {
+            Ok(value) => {
+                let raw = value.to_string();
+                Some(
+                    Url::parse(&raw).map_err(|err| ConfigError::InvalidEndpoint {
+                        value: raw,
+                        message: err.to_string(),
+                    })?,
+                )
+            }
+            Err(_) => None,
+        };
+
+        let persons_pipeline_auth_token = env
+            .secret("CLOUDFLARE_PERSONS_PIPELINE_AUTH_TOKEN")
+            .ok()
+            .map(|secret| secret.to_string())
+            .or_else(|| {
+                env.var("CLOUDFLARE_PERSONS_PIPELINE_AUTH_TOKEN")
+                    .ok()
+                    .map(|var| var.to_string())
+            })
+            .or_else(|| pipeline_auth_token.clone());
 
         let pipeline_timeout = match env.var("CLOUDFLARE_PIPELINE_TIMEOUT_SECS") {
             Ok(value) => value
@@ -135,6 +161,8 @@ impl Config {
             address,
             pipeline_endpoint,
             pipeline_auth_token,
+            persons_pipeline_endpoint,
+            persons_pipeline_auth_token,
             pipeline_timeout,
             posthog_team_id,
             posthog_group_types,
@@ -169,6 +197,25 @@ impl Config {
             })?;
 
         let pipeline_auth_token = env::var("CLOUDFLARE_PIPELINE_AUTH_TOKEN").ok();
+
+        let persons_pipeline_endpoint = match env::var("CLOUDFLARE_PERSONS_PIPELINE_ENDPOINT") {
+            Ok(value) => Some(
+                Url::parse(&value).map_err(|err| ConfigError::InvalidEndpoint {
+                    value,
+                    message: err.to_string(),
+                })?,
+            ),
+            Err(VarError::NotPresent) => None,
+            Err(VarError::NotUnicode(_)) => {
+                return Err(ConfigError::InvalidEndpoint {
+                    value: "<invalid-unicode>".to_string(),
+                    message: "value contains invalid unicode".to_string(),
+                })
+            }
+        };
+        let persons_pipeline_auth_token = env::var("CLOUDFLARE_PERSONS_PIPELINE_AUTH_TOKEN")
+            .ok()
+            .or_else(|| pipeline_auth_token.clone());
 
         let pipeline_timeout = match env::var("CLOUDFLARE_PIPELINE_TIMEOUT_SECS") {
             Ok(value) => value
@@ -232,6 +279,8 @@ impl Config {
             address,
             pipeline_endpoint,
             pipeline_auth_token,
+            persons_pipeline_endpoint,
+            persons_pipeline_auth_token,
             pipeline_timeout,
             posthog_team_id,
             posthog_group_types,

@@ -299,18 +299,18 @@ impl PersonStore for MemoryPersonStore {
         }
 
         let mut records = self.records.write().await;
-        let mut primary_record = records
-            .get(&primary_id)
-            .cloned()
+        let primary_existing = records.get(&primary_id).cloned();
+        let secondary_existing = records.get(&secondary_id).cloned();
+        let mut primary_record = primary_existing
+            .clone()
+            .or_else(|| secondary_existing.clone())
             .unwrap_or_else(|| PersonRecord::new(primary_id.clone(), self.team_id, 0));
         if primary_record.id == 0 {
             primary_record.id = self.allocate_id();
         }
         primary_record.ensure_distinct_id(&alias.distinct_id);
 
-        let mut secondary_record = records
-            .get(&secondary_id)
-            .cloned()
+        let mut secondary_record = secondary_existing
             .unwrap_or_else(|| PersonRecord::new(secondary_id.clone(), self.team_id, 0));
         if secondary_record.id == 0 {
             secondary_record.id = self.allocate_id();
@@ -321,10 +321,16 @@ impl PersonStore for MemoryPersonStore {
         records.insert(primary_id.clone(), merged.clone());
 
         let mut redirects = self.redirects.write().await;
-        redirects.insert(secondary_id.clone(), primary_id.clone());
-        redirects.insert(alias.alias.clone(), primary_id.clone());
+        if secondary_id != primary_id {
+            redirects.insert(secondary_id.clone(), primary_id.clone());
+        }
+        if alias.alias != primary_id {
+            redirects.insert(alias.alias.clone(), primary_id.clone());
+        }
         for id in &merged.distinct_ids {
-            redirects.insert(id.clone(), primary_id.clone());
+            if id != &primary_id {
+                redirects.insert(id.clone(), primary_id.clone());
+            }
         }
 
         Ok(PersonSnapshot {
@@ -592,24 +598,9 @@ mod durable {
                 }
                 (Method::Post, "/merge") => {
                     let body: MergePersonRequest = req.json().await?;
-                    let mut primary_record = self
-                        .state
-                        .storage()
-                        .get::<PersonRecord>(RECORD_KEY)
-                        .await?
-                        .unwrap_or_else(|| {
-                            PersonRecord::new(
-                                body.alias.distinct_id.clone(),
-                                body.team_id,
-                                body.primary_allocated_id,
-                            )
-                        });
-                    if primary_record.id == 0 {
-                        primary_record.id = body.primary_allocated_id;
-                    }
-                    primary_record.ensure_distinct_id(&body.alias.distinct_id);
-
-                    let mut secondary_record = body.secondary.unwrap_or_else(|| {
+                    let primary_existing =
+                        self.state.storage().get::<PersonRecord>(RECORD_KEY).await?;
+                    let mut secondary_record = body.secondary.clone().unwrap_or_else(|| {
                         PersonRecord::new(
                             body.alias.alias.clone(),
                             body.team_id,
@@ -620,6 +611,19 @@ mod durable {
                         secondary_record.id = body.secondary_allocated_id;
                     }
                     secondary_record.ensure_distinct_id(&body.alias.alias);
+
+                    let mut primary_record =
+                        primary_existing.or(body.secondary).unwrap_or_else(|| {
+                            PersonRecord::new(
+                                body.alias.distinct_id.clone(),
+                                body.team_id,
+                                body.primary_allocated_id,
+                            )
+                        });
+                    if primary_record.id == 0 {
+                        primary_record.id = body.primary_allocated_id;
+                    }
+                    primary_record.ensure_distinct_id(&body.alias.distinct_id);
 
                     let merged = PersonRecord::merge(&primary_record, &secondary_record);
                     self.state.storage().put(RECORD_KEY, &merged).await?;
