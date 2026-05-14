@@ -24,6 +24,8 @@ use crate::models::{
 };
 use crate::persons::PersonSnapshot;
 
+const PIPELINE_MAX_RETRIES: usize = 3;
+
 #[derive(Clone)]
 pub struct PipelineClient {
     endpoint: Url,
@@ -32,6 +34,8 @@ pub struct PipelineClient {
     timeout: Duration,
     #[cfg(not(target_arch = "wasm32"))]
     client: Client,
+    #[cfg(not(target_arch = "wasm32"))]
+    max_retries: usize,
 }
 
 impl PipelineClient {
@@ -52,7 +56,20 @@ impl PipelineClient {
             timeout,
             #[cfg(not(target_arch = "wasm32"))]
             client,
+            #[cfg(not(target_arch = "wasm32"))]
+            max_retries: PIPELINE_MAX_RETRIES,
         })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn new_without_retries(
+        endpoint: Url,
+        auth_token: Option<String>,
+        timeout: Duration,
+    ) -> Result<Self, PipelineError> {
+        let mut client = Self::new(endpoint, auth_token, timeout)?;
+        client.max_retries = 0;
+        Ok(client)
     }
 
     #[instrument(skip(self, events), fields(event_count = events.len()))]
@@ -67,29 +84,44 @@ impl PipelineClient {
     {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut request = self.client.post(self.endpoint.clone()).json(&records);
+            for attempt in 0..=self.max_retries {
+                let mut request = self.client.post(self.endpoint.clone()).json(&records);
 
-            if let Some(token) = &self.auth_token {
-                request = request.bearer_auth(token);
-            }
+                if let Some(token) = &self.auth_token {
+                    request = request.bearer_auth(token);
+                }
 
-            let response = request.send().await.map_err(PipelineError::Transport)?;
-            let status = StatusCode::from_u16(response.status().as_u16())
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-
-            if !status.is_success() {
+                let response = match request.send().await {
+                    Ok(response) => response,
+                    Err(err) if attempt < self.max_retries => {
+                        eprintln!("pipeline request transport error, retrying: {err}");
+                        pipeline_sleep_before_retry(attempt).await;
+                        continue;
+                    }
+                    Err(err) => return Err(PipelineError::Transport(err)),
+                };
+                let status = StatusCode::from_u16(response.status().as_u16())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                 let body = response.text().await.unwrap_or_default();
-                return Err(PipelineError::UnexpectedResponse { status, body });
+
+                if !status.is_success() {
+                    if retryable_pipeline_status(status) && attempt < self.max_retries {
+                        pipeline_sleep_before_retry(attempt).await;
+                        continue;
+                    }
+                    return Err(PipelineError::UnexpectedResponse { status, body });
+                }
+
+                info!(
+                    status = %status,
+                    response = %body,
+                    "pipeline request successful"
+                );
+
+                return Ok(());
             }
 
-            let body = response.text().await.unwrap_or_default();
-            info!(
-                status = %status,
-                response = %body,
-                "pipeline request successful"
-            );
-
-            return Ok(());
+            unreachable!("retry loop always returns")
         }
 
         #[cfg(target_arch = "wasm32")]
@@ -149,6 +181,23 @@ impl PipelineClient {
             Ok(())
         }
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn retryable_pipeline_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::TOO_MANY_REQUESTS
+    )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+async fn pipeline_sleep_before_retry(attempt: usize) {
+    let seconds = 2_u64.pow(attempt as u32);
+    tokio::time::sleep(Duration::from_secs(seconds)).await;
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
