@@ -117,10 +117,16 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
         client
             .post(format!("{}/s", hogflare_base))
             .json(&json!({
-                "token": "phc_session",
-                "data": {
-                    "metadata": {"distinct_id": "user-1"},
-                    "chunk": "base64-chunk"
+                "event": "$snapshot",
+                "properties": {
+                    "token": "phc_session",
+                    "distinct_id": "user-1",
+                    "$session_id": "session-e2e",
+                    "$window_id": "window-e2e",
+                    "$snapshot_data": [
+                        {"type": 1, "data": {"source": "e2e"}}
+                    ],
+                    "$lib": "web"
                 }
             }))
             .send()
@@ -202,11 +208,12 @@ async fn pipeline_handles_capture_batch_alias_and_session() -> Result<(), Box<dy
             .expect("missing batch identify event");
         assert_eq!(batch_identify["api_key"], "phc_batch");
 
-        let snapshot = find_event("$snapshot", Some("user-1"));
+        let snapshot = find_event("$snapshot_items", Some("user-1"));
         assert_eq!(snapshot["api_key"], "phc_session");
+        assert_eq!(snapshot["properties"]["$session_id"], "session-e2e");
         assert_eq!(
-            snapshot["properties"]["data"]["metadata"]["distinct_id"],
-            "user-1"
+            snapshot["properties"]["$snapshot_items"][0]["data"]["source"],
+            "e2e"
         );
 
         server_handle.abort();

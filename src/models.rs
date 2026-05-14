@@ -128,7 +128,7 @@ pub struct DecideResponse {
     #[serde(rename = "errorsWhileComputingFlags")]
     pub errors_while_computing_flags: bool,
     #[serde(rename = "sessionRecording")]
-    pub session_recording: DecideSessionRecording,
+    pub session_recording: Value,
     #[serde(rename = "supportedCompression")]
     pub supported_compression: Vec<String>,
 }
@@ -141,7 +141,7 @@ impl Default for DecideResponse {
             feature_flag_payloads: HashMap::new(),
             config: DecideConfig::default(),
             errors_while_computing_flags: false,
-            session_recording: DecideSessionRecording::default(),
+            session_recording: Value::Bool(false),
             supported_compression: vec!["gzip".to_string(), "gzip-js".to_string()],
         }
     }

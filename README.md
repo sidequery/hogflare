@@ -6,9 +6,9 @@ Hogflare is a Cloudflare Workers ingestion layer for PostHog SDKs. It supports P
 
 #### What works today
 
-- Ingestion endpoints: `/capture`, `/identify`, `/alias`, `/batch`, `/e`, `/engage`, `/groups`
+- Ingestion endpoints: `/capture`, `/identify`, `/alias`, `/batch`, `/e`, `/engage`, `/groups`, `/s`
 - Persons and groups: `$set`, `$set_once`, `$unset`, aliasing, and group properties
-- Feature flags: `/flags` and `/decide` are evaluated in the Worker (used by PostHog SDKs)
+- SDK config and feature flags: `/array/:token/config`, `/flags`, and `/decide` are evaluated in the Worker
 - Request enrichment: Cloudflare IP/geo fields added when missing
 - Queryable people: append-only person snapshots can be written to a separate Iceberg table
 
@@ -137,6 +137,7 @@ CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "10"
 # POSTHOG_GROUP_TYPE_2 = "project"
 # POSTHOG_GROUP_TYPE_3 = "org"
 # POSTHOG_GROUP_TYPE_4 = "workspace"
+# POSTHOG_SESSION_RECORDING_ENDPOINT = "/s/"
 
 [[durable_objects.bindings]]
 name = "PERSONS"
@@ -532,6 +533,7 @@ Use `--skip-person-output` when resuming an event import after person rows were 
 - `/e` (event payloads)
 - `/engage`
 - `/groups`
+- `/s` (session replay payloads)
 
 ### Persons
 
@@ -551,11 +553,14 @@ The Durable Object is the source of truth for the current person record. When `C
 
 ### Session replay
 
-- `/s` stores raw session recording chunks only.
+- SDK config advertises `sessionRecording: false` when `POSTHOG_SESSION_RECORDING_ENDPOINT` is unset, so the Worker can keep replay off remotely. Set `POSTHOG_SESSION_RECORDING_ENDPOINT=/s/` to turn replay on and route uploads through Hogflare's ingestion path.
+- `/s` accepts PostHog replay payloads, including gzip/gzip-js compressed browser SDK requests.
+- Modern `$snapshot` payloads are normalized to `$snapshot_items` rows before they are sent through Cloudflare Pipelines into R2.
+- Legacy raw chunk payloads are still accepted as `$snapshot` rows.
 
 ### Feature flags
 
-Feature flags are evaluated in the Worker and exposed via `/decide` and `/flags`.
+Feature flags and SDK remote config are evaluated in the Worker and exposed via `/array/:token/config`, `/decide`, and `/flags`.
 
 Configuration is a JSON blob in `HOGFLARE_FEATURE_FLAGS`. It can be either:
 

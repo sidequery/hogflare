@@ -49,6 +49,10 @@ jobs:
       - name: Install JS test dependencies
         run: bun install --cwd tests/js_client --frozen-lockfile
 
+      - name: Install Playwright browser
+        working-directory: tests/js_client
+        run: bunx playwright install --with-deps chromium
+
       - name: Verify Docker Compose
         run: docker compose version
 

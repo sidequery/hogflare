@@ -41,6 +41,11 @@ pub struct PostHogBatchPayload {
     pub batch: BatchRequest,
 }
 
+pub struct PostHogRawPayload {
+    pub items: Vec<Value>,
+    pub sent_at: Option<DateTime<Utc>>,
+}
+
 pub struct RequestEnrichment {
     properties: Map<String, Value>,
 }
@@ -288,6 +293,52 @@ impl FromRequest<AppState, Body> for PostHogBatchPayload {
         }
 
         Ok(PostHogBatchPayload { batch: payload })
+    }
+}
+
+#[async_trait]
+impl FromRequest<AppState, Body> for PostHogRawPayload {
+    type Rejection = PayloadExtractorError;
+
+    async fn from_request(
+        request: Request<Body>,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let (parts, body) = request.into_parts();
+        let headers = parts.headers;
+        let query = parts.uri.query().map(str::to_string);
+        let bytes = to_bytes(body, usize::MAX)
+            .await
+            .map_err(PayloadExtractorError::BodyRead)?;
+
+        verify_signature(&headers, &bytes, state.signing_secret.as_deref())?;
+        let decoded = decode_content_encoding(&headers, &bytes)?;
+        let query_params = parse_query_params(query.as_deref())?;
+        let query_compression = query_param(&query_params, "compression")
+            .or_else(|| query_param(&query_params, "compression_method"));
+        let mut payloads =
+            parse_posthog_body_with_compression::<Value>(&headers, &decoded, query_compression)?;
+
+        if let Some(api_key) = header_api_key(&headers) {
+            apply_api_key_to_values(&mut payloads, &api_key);
+        }
+
+        Ok(PostHogRawPayload {
+            items: payloads,
+            sent_at: header_sent_at(&headers),
+        })
+    }
+}
+
+fn apply_api_key_to_values(items: &mut [Value], api_key: &str) {
+    for item in items {
+        let Value::Object(map) = item else {
+            continue;
+        };
+        if map.get("api_key").is_none() && map.get("token").is_none() && map.get("$token").is_none()
+        {
+            map.insert("api_key".to_string(), Value::String(api_key.to_string()));
+        }
     }
 }
 

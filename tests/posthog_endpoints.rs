@@ -3,6 +3,7 @@ mod helpers;
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
 use chrono::Utc;
+use flate2::{write::GzEncoder, Compression};
 use helpers::{
     cleanup, spawn_app_with_options, spawn_app_with_options_and_debug,
     spawn_app_with_options_debug_and_person_pipeline, spawn_app_with_runtime_options,
@@ -13,7 +14,7 @@ use hogflare::{feature_flags::FeatureFlagStore, groups::GroupTypeMap};
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 use sha2::Sha256;
-use std::time::Duration;
+use std::{io::Write, time::Duration};
 
 fn posthog_sha256_signature(secret: &str, body: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
@@ -621,13 +622,60 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
         "https://session.example.com"
     );
 
-    // session recording ingestion stubs
+    let config_response = client
+        .get(format!("{}/array/phc_body_token/config", base_url))
+        .send()
+        .await?;
+    assert!(config_response.status().is_success());
+    let config_body: Value = config_response.json().await?;
+    assert_eq!(config_body["token"], "phc_body_token");
+    assert_eq!(config_body["analytics"]["endpoint"], "/e/");
+    assert_eq!(
+        config_body["sessionRecording"]["endpoint"],
+        "https://session.example.com"
+    );
+    assert_eq!(
+        config_body["sessionRecording"]["scriptConfig"]["script"],
+        "posthog-recorder"
+    );
+
+    let flags_config_response = client
+        .post(format!("{}/flags?config=true", base_url))
+        .json(&json!({ "token": "phc_body_token" }))
+        .send()
+        .await?;
+    assert!(flags_config_response.status().is_success());
+    let flags_config_body: Value = flags_config_response.json().await?;
+    assert_eq!(
+        flags_config_body["sessionRecording"]["endpoint"],
+        "https://session.example.com"
+    );
+    assert_eq!(flags_config_body["sessionRecording"]["proxy"], true);
+
+    let config_js_response = client
+        .get(format!("{}/array/phc_body_token/config.js", base_url))
+        .send()
+        .await?;
+    assert!(config_js_response.status().is_success());
+    let config_js = config_js_response.text().await?;
+    assert!(config_js.contains("window._POSTHOG_REMOTE_CONFIG"));
+    assert!(config_js.contains("phc_body_token"));
+
+    // session recording ingestion
     let session_payload = json!({
-        "data": {
-            "chunk": "base64-chunk",
-            "metadata": {"distinct_id": "session-user"}
-        },
-        "token": "phc_session_chunk"
+        "event": "$snapshot",
+        "properties": {
+            "token": "phc_session_chunk",
+            "distinct_id": "session-user",
+            "$session_id": "session-abc",
+            "$window_id": "window-abc",
+            "$snapshot_data": [
+                {"type": 1, "timestamp": 1700000000000_i64, "data": {"href": "https://example.test"}}
+            ],
+            "$snapshot_bytes": 123,
+            "$lib": "web",
+            "$lib_version": "1.0.0"
+        }
     });
 
     let session_response = client
@@ -642,12 +690,77 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
 
     let session_events = wait_for_events(&mut pipeline_rx).await?;
     assert_eq!(session_events.len(), 1);
-    assert_eq!(session_events[0]["event"], "$snapshot");
+    assert_eq!(session_events[0]["event"], "$snapshot_items");
+    assert_eq!(session_events[0]["distinct_id"], "session-user");
     assert_eq!(
-        session_events[0]["properties"]["data"]["metadata"]["distinct_id"],
-        "session-user"
+        session_events[0]["properties"]["$session_id"],
+        "session-abc"
+    );
+    assert_eq!(
+        session_events[0]["properties"]["$snapshot_items"][0]["data"]["href"],
+        "https://example.test"
     );
     assert_eq!(session_events[0]["api_key"], "phc_session_chunk");
+
+    let compressed_payload = json!([
+        {
+            "event": "$snapshot",
+            "properties": {
+                "token": "phc_session_gzip",
+                "distinct_id": "session-user",
+                "$session_id": "session-def",
+                "$snapshot_data": {"type": 2, "data": {"source": "gzip-js"}},
+                "$lib": "web"
+            }
+        }
+    ])
+    .to_string();
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(compressed_payload.as_bytes())?;
+    let compressed = encoder.finish()?;
+
+    let gzip_response = client
+        .post(format!("{}/s?compression=gzip-js", base_url))
+        .header("Content-Type", "text/plain")
+        .body(compressed)
+        .send()
+        .await?;
+    assert!(gzip_response.status().is_success());
+
+    let gzip_events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(gzip_events.len(), 1);
+    assert_eq!(gzip_events[0]["event"], "$snapshot_items");
+    assert_eq!(gzip_events[0]["properties"]["$session_id"], "session-def");
+    assert_eq!(
+        gzip_events[0]["properties"]["$snapshot_items"][0]["data"]["source"],
+        "gzip-js"
+    );
+    assert_eq!(gzip_events[0]["api_key"], "phc_session_gzip");
+
+    let beacon_response = client
+        .post(format!("{}/s?beacon=1", base_url))
+        .json(&json!({
+            "event": "$snapshot",
+            "properties": {
+                "token": "phc_session_beacon",
+                "distinct_id": "session-user",
+                "$session_id": "session-beacon",
+                "$snapshot_data": {"type": 3, "data": {"source": "beacon"}},
+                "$lib": "web"
+            }
+        }))
+        .send()
+        .await?;
+    assert_eq!(beacon_response.status(), StatusCode::NO_CONTENT);
+
+    let beacon_events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(beacon_events.len(), 1);
+    assert_eq!(beacon_events[0]["event"], "$snapshot_items");
+    assert_eq!(
+        beacon_events[0]["properties"]["$snapshot_items"][0]["data"]["source"],
+        "beacon"
+    );
+    assert_eq!(beacon_events[0]["api_key"], "phc_session_beacon");
 
     // health
     let health_response = client.get(format!("{}/healthz", base_url)).send().await?;
@@ -826,6 +939,46 @@ async fn anonymous_identify_transition_enriches_events_and_person(
         .expect("person should include distinct_ids");
     assert!(distinct_ids.contains(&Value::String("anon-transition-user".to_string())));
     assert!(distinct_ids.contains(&Value::String("identified-transition-user".to_string())));
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sdk_config_disables_session_recording_without_endpoint(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (pipeline_endpoint, _pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) =
+        spawn_app_with_options(pipeline_endpoint, None, None, None, None).await?;
+
+    let base_url = format!("http://{}", address);
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+
+    let decide_response = client
+        .post(format!("{}/decide", base_url))
+        .json(&json!({ "token": "phc_no_replay" }))
+        .send()
+        .await?;
+    assert!(decide_response.status().is_success());
+    let decide_body: Value = decide_response.json().await?;
+    assert_eq!(decide_body["sessionRecording"], false);
+
+    let config_response = client
+        .get(format!("{}/array/phc_no_replay/config", base_url))
+        .send()
+        .await?;
+    assert!(config_response.status().is_success());
+    let config_body: Value = config_response.json().await?;
+    assert_eq!(config_body["sessionRecording"], false);
+
+    let flags_config_response = client
+        .post(format!("{}/flags?config=true", base_url))
+        .json(&json!({ "token": "phc_no_replay" }))
+        .send()
+        .await?;
+    assert!(flags_config_response.status().is_success());
+    let flags_config_body: Value = flags_config_response.json().await?;
+    assert_eq!(flags_config_body["sessionRecording"], false);
 
     cleanup(server_handle, pipeline_handle).await;
     Ok(())
