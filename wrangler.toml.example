@@ -4,6 +4,7 @@ compatibility_date = "2025-01-09"
 
 [vars]
 CLOUDFLARE_PIPELINE_ENDPOINT = "https://<stream-id>.ingest.cloudflare.com"
+CLOUDFLARE_PERSONS_PIPELINE_ENDPOINT = "https://<persons-stream-id>.ingest.cloudflare.com"
 CLOUDFLARE_PIPELINE_TIMEOUT_SECS = "10"
 
 [[durable_objects.bindings]]

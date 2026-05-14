@@ -103,6 +103,76 @@ async fn durable_object_person_updates_apply() -> Result<(), Box<dyn std::error:
     let alias_snapshot = fetch_person(&client, &base_url, debug_token, "anon-1").await?;
     assert_eq!(alias_snapshot.canonical_id, "person-1");
 
+    // anon capture followed by identify with $anon_distinct_id should keep the anon person id
+    client
+        .post(format!("{base_url}/capture"))
+        .json(&json!({
+            "event": "anon-start",
+            "distinct_id": "anon-existing",
+            "properties": {
+                "$set": { "initial_referrer": "adwords" },
+                "$set_once": { "first_seen_source": "landing" }
+            }
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let anon_snapshot = fetch_person(&client, &base_url, debug_token, "anon-existing").await?;
+    assert_eq!(anon_snapshot.canonical_id, "anon-existing");
+    let anon_record = anon_snapshot.record.expect("expected anon person record");
+    let anon_uuid = anon_record["uuid"]
+        .as_str()
+        .expect("anon record should have uuid")
+        .to_string();
+    let anon_id = anon_record["id"].clone();
+
+    client
+        .post(format!("{base_url}/identify"))
+        .json(&json!({
+            "distinct_id": "identified-existing",
+            "properties": {
+                "$anon_distinct_id": "anon-existing",
+                "$set": {
+                    "email": "identified@example.com",
+                    "plan": "pro"
+                },
+                "$set_once": {
+                    "signup_source": "product"
+                }
+            }
+        }))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let merged_from_anon = fetch_person(&client, &base_url, debug_token, "anon-existing").await?;
+    assert_eq!(merged_from_anon.canonical_id, "identified-existing");
+    let merged_record = merged_from_anon
+        .record
+        .expect("expected merged person record");
+    assert_eq!(merged_record["uuid"], anon_uuid);
+    assert_eq!(merged_record["id"], anon_id);
+    assert_eq!(
+        merged_record["properties"]["email"],
+        "identified@example.com"
+    );
+    assert_eq!(merged_record["properties"]["plan"], "pro");
+    assert_eq!(merged_record["properties"]["initial_referrer"], "adwords");
+    assert_eq!(
+        merged_record["properties_set_once"]["first_seen_source"],
+        "landing"
+    );
+    assert_eq!(
+        merged_record["properties_set_once"]["signup_source"],
+        "product"
+    );
+    let distinct_ids = merged_record["distinct_ids"]
+        .as_array()
+        .expect("merged record should include distinct ids");
+    assert!(distinct_ids.contains(&Value::String("anon-existing".to_string())));
+    assert!(distinct_ids.contains(&Value::String("identified-existing".to_string())));
+
     shutdown_wrangler(&mut wrangler).await;
     cleanup_wrangler(&mut wrangler).await;
     cleanup_pipeline(pipeline_handle).await;
@@ -198,6 +268,8 @@ fn spawn_wrangler_dev(
         .arg("127.0.0.1")
         .arg("--port")
         .arg(port.to_string())
+        .arg("--persist-to")
+        .arg(log_dir.join("wrangler-state"))
         .arg("--log-level")
         .arg("error")
         .env("WRANGLER_SEND_METRICS", "false")

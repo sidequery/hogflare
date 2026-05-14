@@ -1,0 +1,25 @@
+{
+  "fields": [
+    { "name": "uuid", "type": "string", "required": true },
+    { "name": "team_id", "type": "int64", "required": false },
+    { "name": "source", "type": "string", "required": true },
+    { "name": "operation", "type": "string", "required": true },
+    { "name": "person_id", "type": "string", "required": true },
+    { "name": "person_int_id", "type": "int64", "required": true },
+    { "name": "canonical_distinct_id", "type": "string", "required": true },
+    {
+      "name": "distinct_ids",
+      "type": "list",
+      "required": true,
+      "items": { "type": "string" }
+    },
+    { "name": "created_at", "type": "timestamp", "required": true },
+    { "name": "updated_at", "type": "timestamp", "required": true },
+    { "name": "version", "type": "int64", "required": true },
+    { "name": "properties", "type": "json", "required": true },
+    { "name": "properties_set_once", "type": "json", "required": true },
+    { "name": "merged_properties", "type": "json", "required": true },
+    { "name": "api_key", "type": "string", "required": false },
+    { "name": "source_event_uuid", "type": "string", "required": true }
+  ]
+}

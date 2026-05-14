@@ -22,6 +22,7 @@ use crate::models::{
     hash_map_is_empty, AliasRequest, CaptureRequest, EngageRequest, GroupIdentifyRequest,
     IdentifyRequest,
 };
+use crate::persons::PersonSnapshot;
 
 #[derive(Clone)]
 pub struct PipelineClient {
@@ -56,9 +57,17 @@ impl PipelineClient {
 
     #[instrument(skip(self, events), fields(event_count = events.len()))]
     pub async fn send(&self, events: Vec<PipelineEvent>) -> Result<(), PipelineError> {
+        self.send_records(events).await
+    }
+
+    #[instrument(skip(self, records), fields(record_count = records.len()))]
+    pub async fn send_records<T>(&self, records: Vec<T>) -> Result<(), PipelineError>
+    where
+        T: Serialize,
+    {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let mut request = self.client.post(self.endpoint.clone()).json(&events);
+            let mut request = self.client.post(self.endpoint.clone()).json(&records);
 
             if let Some(token) = &self.auth_token {
                 request = request.bearer_auth(token);
@@ -85,7 +94,7 @@ impl PipelineClient {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let body = serde_json::to_string(&events).map_err(PipelineError::Serialize)?;
+            let body = serde_json::to_string(&records).map_err(PipelineError::Serialize)?;
 
             let headers = Headers::new();
             headers
@@ -139,6 +148,63 @@ impl PipelineClient {
 
             Ok(())
         }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub struct PersonPipelineRecord {
+    pub uuid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team_id: Option<i64>,
+    pub source: &'static str,
+    pub operation: String,
+    pub person_id: String,
+    pub person_int_id: i64,
+    pub canonical_distinct_id: String,
+    pub distinct_ids: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub version: i64,
+    pub properties: Value,
+    pub properties_set_once: Value,
+    pub merged_properties: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    pub source_event_uuid: String,
+}
+
+impl PersonPipelineRecord {
+    pub fn from_snapshot(
+        snapshot: &PersonSnapshot,
+        operation: impl Into<String>,
+        event: &PipelineEvent,
+    ) -> Option<Self> {
+        let record = snapshot.record.as_ref()?;
+        Some(Self {
+            uuid: Uuid::new_v4().to_string(),
+            team_id: record.team_id,
+            source: "hogflare",
+            operation: operation.into(),
+            person_id: record.uuid.clone(),
+            person_int_id: record.id,
+            canonical_distinct_id: snapshot.canonical_id.clone(),
+            distinct_ids: Value::Array(
+                record
+                    .distinct_ids
+                    .iter()
+                    .cloned()
+                    .map(Value::String)
+                    .collect(),
+            ),
+            created_at: record.created_at,
+            updated_at: Utc::now(),
+            version: record.version,
+            properties: Value::Object(record.properties.clone()),
+            properties_set_once: Value::Object(record.properties_set_once.clone()),
+            merged_properties: record.merged_properties(),
+            api_key: event.api_key.clone(),
+            source_event_uuid: event.uuid.clone(),
+        })
     }
 }
 

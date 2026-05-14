@@ -50,6 +50,7 @@ export async function setupPosthog(options = {}) {
   return { posthog, apiHost, apiKey, distinctId };
 }
 
-export function waitForFlush(ms = 500) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function waitForFlush(ms) {
+  const delay = ms ?? Number(process.env.HOGFLARE_FLUSH_WAIT_MS || 500);
+  return new Promise((resolve) => setTimeout(resolve, delay));
 }
