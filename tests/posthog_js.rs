@@ -1,7 +1,7 @@
 #[path = "helpers/mod.rs"]
 mod helpers;
 
-use std::time::Duration;
+use std::{io::Write, time::Duration};
 
 use helpers::{
     cleanup, collect_events_until, spawn_app, spawn_app_with_options,
@@ -11,6 +11,7 @@ use helpers::{
 use hogflare::groups::GroupTypeMap;
 use reqwest::Client;
 use serde_json::Value;
+use tempfile::NamedTempFile;
 use tokio::process::Command;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -518,6 +519,92 @@ async fn posthog_js_multiple_events_forwarded_to_pipeline() -> Result<(), Box<dy
         "expected signup_complete event, got: {:?}",
         event_types
     );
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posthog_js_session_replay_output_is_playable() -> Result<(), Box<dyn std::error::Error>> {
+    let api_key = "phc_replay_playback";
+    let distinct_id = "js-replay-playback-user";
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app_with_options(
+        pipeline_endpoint,
+        Some(api_key.to_string()),
+        Some("/s/".to_string()),
+        None,
+        None,
+    )
+    .await?;
+
+    let record_output = Command::new("bun")
+        .arg("run")
+        .arg("posthog_session_replay_playwright.js")
+        .current_dir("tests/js_client")
+        .env("HOGFLARE_HOST", format!("http://{}", address))
+        .env("HOGFLARE_API_KEY", api_key)
+        .env("HOGFLARE_DISTINCT_ID", distinct_id)
+        .output()
+        .await?;
+
+    if !record_output.status.success() {
+        return Err(format!(
+            "posthog replay script exited with status {:?}\nstdout:\n{}\nstderr:\n{}",
+            record_output.status,
+            String::from_utf8_lossy(&record_output.stdout),
+            String::from_utf8_lossy(&record_output.stderr)
+        )
+        .into());
+    }
+
+    let events = collect_events_until(&mut pipeline_rx, 1, Duration::from_secs(15)).await?;
+    let replay_event = events
+        .iter()
+        .find(|event| event["event"] == "$snapshot_items")
+        .ok_or_else(|| format!("missing $snapshot_items event: {events:?}"))?;
+
+    assert_eq!(replay_event["source"], "posthog");
+    assert_eq!(replay_event["api_key"], api_key);
+    assert_eq!(replay_event["distinct_id"], distinct_id);
+    assert_eq!(replay_event["properties"]["distinct_id"], distinct_id);
+    assert_eq!(replay_event["properties"]["$lib"], "web");
+
+    let snapshot_items = replay_event["properties"]["$snapshot_items"]
+        .as_array()
+        .ok_or("expected $snapshot_items array")?;
+    assert!(
+        snapshot_items.len() >= 2,
+        "expected at least a full snapshot and one follow-up event, got {snapshot_items:?}"
+    );
+    assert!(
+        snapshot_items.iter().any(|event| event["type"] == 2),
+        "expected replay output to contain an rrweb full snapshot: {snapshot_items:?}"
+    );
+
+    let mut replay_file = NamedTempFile::new()?;
+    replay_file.write_all(serde_json::to_string(snapshot_items)?.as_bytes())?;
+    replay_file.flush()?;
+
+    let playback_output = Command::new("bun")
+        .arg("run")
+        .arg("verify_rrweb_playback.js")
+        .current_dir("tests/js_client")
+        .env("HOGFLARE_REPLAY_EVENTS_FILE", replay_file.path())
+        .output()
+        .await?;
+
+    if !playback_output.status.success() {
+        return Err(format!(
+            "rrweb playback script exited with status {:?}\nrecord stdout:\n{}\nrecord stderr:\n{}\nplayback stdout:\n{}\nplayback stderr:\n{}",
+            playback_output.status,
+            String::from_utf8_lossy(&record_output.stdout),
+            String::from_utf8_lossy(&record_output.stderr),
+            String::from_utf8_lossy(&playback_output.stdout),
+            String::from_utf8_lossy(&playback_output.stderr)
+        )
+        .into());
+    }
 
     cleanup(server_handle, pipeline_handle).await;
     Ok(())

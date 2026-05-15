@@ -451,18 +451,21 @@ impl PipelineEvent {
 
     pub fn from_session_recording(
         distinct_id: String,
-        payload: Value,
+        event: String,
+        properties: Value,
         api_key: Option<String>,
+        timestamp: Option<DateTime<Utc>>,
+        extra: std::collections::HashMap<String, Value>,
     ) -> Self {
         Self {
             uuid: Uuid::new_v4().to_string(),
             team_id: None,
             source: "posthog",
-            event: "$snapshot".to_string(),
+            event,
             distinct_id,
             created_at: Utc::now(),
-            timestamp: None,
-            properties: Some(payload),
+            timestamp,
+            properties: Some(properties),
             context: None,
             person_id: None,
             person_created_at: None,
@@ -474,7 +477,7 @@ impl PipelineEvent {
             group4: None,
             group_properties: None,
             api_key,
-            extra: std::collections::HashMap::new(),
+            extra,
         }
     }
 
@@ -659,8 +662,11 @@ mod tests {
 
         let event = PipelineEvent::from_session_recording(
             "recording-user".to_string(),
+            "$snapshot".to_string(),
             payload.clone(),
             Some("phc_session".to_string()),
+            None,
+            std::collections::HashMap::new(),
         );
 
         assert_eq!(event.event, "$snapshot");

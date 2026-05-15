@@ -8,10 +8,9 @@ pub mod models;
 pub mod persons;
 pub mod pipeline;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use axum::{
-    body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -21,14 +20,13 @@ use axum::{
 use chrono::Utc;
 use config::{Config, ConfigError};
 use extractors::{
-    header_api_key, header_sent_at, verify_signature, ApplyApiKey, PostHogBatchPayload,
-    PostHogPayload, RequestEnrichment,
+    ApplyApiKey, PostHogBatchPayload, PostHogPayload, PostHogRawPayload, RequestEnrichment,
 };
 use feature_flags::{FeatureFlagContext, FeatureFlagStore};
 use groups::{GroupError, GroupStore, GroupTypeMap, NoopGroupStore};
 use models::{
-    AliasRequest, BatchRequest, CaptureRequest, DecideResponse, DecideSessionRecording,
-    EngageRequest, ErrorResponse, GroupIdentifyRequest, IdentifyRequest, PostHogResponse,
+    AliasRequest, BatchRequest, CaptureRequest, DecideResponse, EngageRequest, ErrorResponse,
+    GroupIdentifyRequest, IdentifyRequest, PostHogResponse,
 };
 use persons::{
     alias_from_request, update_from_capture, update_from_engage, update_from_identify,
@@ -443,6 +441,8 @@ fn router(state: AppState) -> Router {
         .route("/decide", post(decide))
         .route("/flags", post(flags))
         .route("/flags/", post(flags))
+        .route("/array/:token/config", get(array_config))
+        .route("/array/:token/config.js", get(array_config_js))
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
         .route("/__debug/person/:id", get(debug_person))
@@ -1169,11 +1169,7 @@ async fn decide(
     response.config.api_token = api_key;
     response.feature_flags = feature_flags;
     response.feature_flag_payloads = feature_flag_payloads;
-
-    if let Some(endpoint) = state.session_recording_endpoint.clone() {
-        response.session_recording.endpoint = Some(endpoint);
-        response.session_recording.proxy = true;
-    }
+    response.session_recording = decide_session_recording_config(&state);
 
     Ok(Json(response))
 }
@@ -1193,7 +1189,7 @@ struct FlagsResponse {
     #[serde(rename = "evaluatedAt")]
     evaluated_at: i64,
     #[serde(rename = "sessionRecording", skip_serializing_if = "Option::is_none")]
-    session_recording: Option<DecideSessionRecording>,
+    session_recording: Option<Value>,
     #[serde(rename = "supportedCompression", skip_serializing_if = "Vec::is_empty")]
     supported_compression: Vec<String>,
 }
@@ -1216,13 +1212,7 @@ async fn flags(
     let evaluated_at = Utc::now().timestamp_millis();
 
     if include_config {
-        let mut recording = DecideSessionRecording::default();
-        recording.proxy = true;
-        if let Some(endpoint) = state.session_recording_endpoint.clone() {
-            recording.endpoint = Some(endpoint);
-        }
-        session_recording = Some(recording);
-
+        session_recording = Some(decide_session_recording_config(&state));
         supported_compression = vec!["gzip".to_string(), "gzip-js".to_string()];
     }
 
@@ -1239,53 +1229,390 @@ async fn flags(
     .into_response())
 }
 
+fn decide_session_recording_config(state: &AppState) -> Value {
+    let Some(endpoint) = state.session_recording_endpoint.as_ref() else {
+        return Value::Bool(false);
+    };
+
+    json!({
+        "endpoint": endpoint,
+        "consoleLogRecordingEnabled": true,
+        "proxy": true
+    })
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn array_config(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    Ok(Json(remote_config_response(&state, &token)))
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn array_config_js(
+    State(state): State<AppState>,
+    Path(token): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    let config = remote_config_response(&state, &token);
+    let token_json =
+        serde_json::to_string(&token).map_err(|err| AppError::InvalidPayload(err.to_string()))?;
+    let config_json =
+        serde_json::to_string(&config).map_err(|err| AppError::InvalidPayload(err.to_string()))?;
+    let body = format!(
+        "(function() {{\n  window._POSTHOG_REMOTE_CONFIG = window._POSTHOG_REMOTE_CONFIG || {{}};\n  window._POSTHOG_REMOTE_CONFIG[{token_json}] = {{\n    config: {config_json},\n    siteApps: []\n  }}\n}})();\n"
+    );
+
+    Ok((
+        [("content-type", "application/javascript; charset=utf-8")],
+        body,
+    )
+        .into_response())
+}
+
+fn remote_config_response(state: &AppState, token: &str) -> Value {
+    json!({
+        "token": token,
+        "supportedCompression": ["gzip", "gzip-js"],
+        "hasFeatureFlags": !state.feature_flags.is_empty(),
+        "analytics": { "endpoint": "/e/" },
+        "captureDeadClicks": false,
+        "capturePerformance": false,
+        "autocapture_opt_out": false,
+        "autocaptureExceptions": false,
+        "elementsChainAsString": true,
+        "errorTracking": {
+            "autocaptureExceptions": false,
+            "suppressionRules": []
+        },
+        "logs": { "captureConsoleLogs": false },
+        "sessionRecording": session_recording_remote_config(state),
+        "heatmaps": false,
+        "conversations": false,
+        "surveys": false,
+        "productTours": false,
+        "defaultIdentifiedOnly": true
+    })
+}
+
+fn session_recording_remote_config(state: &AppState) -> Value {
+    let Some(endpoint) = state.session_recording_endpoint.as_ref() else {
+        return Value::Bool(false);
+    };
+
+    json!({
+        "endpoint": endpoint,
+        "consoleLogRecordingEnabled": true,
+        "recorderVersion": "v2",
+        "sampleRate": null,
+        "minimumDurationMilliseconds": null,
+        "networkPayloadCapture": null,
+        "recordCanvas": false,
+        "canvasFps": null,
+        "canvasQuality": null,
+        "scriptConfig": { "script": "posthog-recorder" },
+        "version": 1,
+        "urlTriggers": [],
+        "urlBlocklist": [],
+        "eventTriggers": [],
+        "triggerMatchType": null,
+        "masking": null,
+        "linkedFlag": null
+    })
+}
+
 #[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn session_recording(
     State(state): State<AppState>,
     enrichment: RequestEnrichment,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Json<PostHogResponse>, AppError> {
-    let raw = body.to_vec();
-    verify_signature(&headers, &raw, state.signing_secret.as_deref()).map_err(AppError::from)?;
+    axum::extract::Query(query): axum::extract::Query<SessionRecordingQuery>,
+    payload: PostHogRawPayload,
+) -> Result<impl IntoResponse, AppError> {
+    let sent_at = payload.sent_at.clone();
+    let items = expand_session_recording_values(payload.items)?;
+    let mut events = Vec::new();
+    let mut person_records = Vec::new();
 
-    let sent_at = header_sent_at(&headers);
-    let payload: Value =
-        serde_json::from_slice(&raw).map_err(|err| AppError::InvalidPayload(err.to_string()))?;
+    for item in items {
+        let normalized = normalize_session_recording(item)?;
+        let snapshot = ensure_person_snapshot(&state, &normalized.distinct_id).await?;
+        let (person_id, person_created_at, person_properties) = person_fields(&snapshot);
 
-    let api_key = header_api_key(&headers).or_else(|| {
-        payload
-            .get("token")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string())
-    });
-
-    let distinct_id = payload
-        .pointer("/data/metadata/distinct_id")
-        .or_else(|| payload.get("distinct_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("session-recording")
-        .to_string();
-
-    let snapshot = ensure_person_snapshot(&state, &distinct_id).await?;
-    let (person_id, person_created_at, person_properties) = person_fields(&snapshot);
-
-    let event = PipelineEvent::from_session_recording(distinct_id, payload, api_key)
+        let event = PipelineEvent::from_session_recording(
+            normalized.distinct_id,
+            normalized.event,
+            normalized.properties,
+            normalized.api_key,
+            normalized.timestamp,
+            normalized.extra,
+        )
         .with_team_id(state.posthog_team_id)
         .with_person(person_id, person_created_at, person_properties)
         .with_groups([None, None, None, None, None], None)
-        .with_sent_at(sent_at)
+        .with_sent_at(sent_at.clone())
         .with_enrichment(enrichment.properties());
+        push_person_record(&mut person_records, &snapshot, "session_recording", &event);
+        events.push(event);
+    }
 
-    send_person_records(
-        &state,
-        PersonPipelineRecord::from_snapshot(&snapshot, "session_recording", &event)
-            .into_iter()
-            .collect(),
-    )
-    .await?;
-    state.pipeline.send(vec![event]).await?;
-    Ok(Json(PostHogResponse::success()))
+    send_person_records(&state, person_records).await?;
+    state.pipeline.send(events).await?;
+
+    if query.beacon.as_deref() == Some("1") {
+        Ok(StatusCode::NO_CONTENT.into_response())
+    } else {
+        Ok(Json(PostHogResponse::success()).into_response())
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct SessionRecordingQuery {
+    #[serde(default)]
+    beacon: Option<String>,
+}
+
+struct NormalizedSessionRecording {
+    event: String,
+    distinct_id: String,
+    api_key: Option<String>,
+    timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    properties: Value,
+    extra: HashMap<String, Value>,
+}
+
+fn expand_session_recording_values(values: Vec<Value>) -> Result<Vec<Value>, AppError> {
+    let mut expanded = Vec::new();
+
+    for value in values {
+        let Value::Object(mut object) = value else {
+            return Err(AppError::InvalidPayload(
+                "expected session recording object".to_string(),
+            ));
+        };
+
+        let Some(batch_value) = object.remove("batch") else {
+            expanded.push(Value::Object(object));
+            continue;
+        };
+
+        let batch = batch_value.as_array().ok_or_else(|| {
+            AppError::InvalidPayload("expected session recording batch array".to_string())
+        })?;
+        let shared = object;
+
+        for item in batch {
+            let mut item_object = item.as_object().cloned().ok_or_else(|| {
+                AppError::InvalidPayload("expected session recording batch item object".to_string())
+            })?;
+
+            for key in ["api_key", "token", "$token"] {
+                if item_object.get(key).is_none() {
+                    if let Some(value) = shared.get(key) {
+                        item_object.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+
+            expanded.push(Value::Object(item_object));
+        }
+    }
+
+    if expanded.is_empty() {
+        return Err(AppError::InvalidPayload(
+            "empty session recording batch".to_string(),
+        ));
+    }
+
+    Ok(expanded)
+}
+
+fn normalize_session_recording(value: Value) -> Result<NormalizedSessionRecording, AppError> {
+    let Value::Object(object) = value else {
+        return Err(AppError::InvalidPayload(
+            "expected session recording object".to_string(),
+        ));
+    };
+
+    if object
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_none()
+        && (object.get("metadata").is_some() || object.get("chunk").is_some())
+    {
+        return normalize_legacy_session_recording(object);
+    }
+
+    normalize_modern_session_recording(object)
+}
+
+fn normalize_legacy_session_recording(
+    mut object: serde_json::Map<String, Value>,
+) -> Result<NormalizedSessionRecording, AppError> {
+    let api_key = recording_api_key(&object, None)
+        .ok_or_else(|| AppError::InvalidPayload("missing session recording token".to_string()))?;
+    let distinct_id = object
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("distinct_id"))
+        .or_else(|| object.get("distinct_id"))
+        .and_then(recording_id_string)
+        .ok_or_else(|| AppError::InvalidPayload("missing distinct_id".to_string()))?;
+
+    object.remove("api_key");
+    object.remove("token");
+    object.remove("$token");
+
+    Ok(NormalizedSessionRecording {
+        event: "$snapshot".to_string(),
+        distinct_id,
+        api_key: Some(api_key),
+        timestamp: None,
+        properties: json!({ "data": Value::Object(object) }),
+        extra: HashMap::new(),
+    })
+}
+
+fn normalize_modern_session_recording(
+    object: serde_json::Map<String, Value>,
+) -> Result<NormalizedSessionRecording, AppError> {
+    let properties = object
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| AppError::InvalidPayload("missing recording properties".to_string()))?;
+
+    let api_key = recording_api_key(&object, Some(properties))
+        .ok_or_else(|| AppError::InvalidPayload("missing session recording token".to_string()))?;
+    let distinct_id = object
+        .get("distinct_id")
+        .or_else(|| object.get("$distinct_id"))
+        .or_else(|| properties.get("distinct_id"))
+        .or_else(|| properties.get("$distinct_id"))
+        .and_then(recording_id_string)
+        .ok_or_else(|| AppError::InvalidPayload("missing distinct_id".to_string()))?;
+
+    let event = object
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or("$snapshot");
+    if event != "$snapshot" && event != "$snapshot_items" {
+        return Err(AppError::InvalidPayload(format!(
+            "unsupported session recording event {event}"
+        )));
+    }
+
+    let session_id = properties
+        .get("$session_id")
+        .and_then(Value::as_str)
+        .filter(|value| valid_session_id(value))
+        .ok_or_else(|| AppError::InvalidPayload("missing or invalid $session_id".to_string()))?;
+    let session_id_value = Value::String(session_id.to_string());
+    let window_id_value = properties
+        .get("$window_id")
+        .cloned()
+        .unwrap_or_else(|| session_id_value.clone());
+    let snapshot_source = properties
+        .get("$snapshot_source")
+        .cloned()
+        .unwrap_or_else(|| Value::String("web".to_string()));
+    let snapshot_library = properties
+        .get("$lib")
+        .and_then(Value::as_str)
+        .unwrap_or("web")
+        .to_string();
+
+    let snapshot_items = properties
+        .get("$snapshot_items")
+        .or_else(|| properties.get("$snapshot_data"))
+        .ok_or_else(|| AppError::InvalidPayload("missing $snapshot_data".to_string()))
+        .and_then(snapshot_items_from_value)?;
+
+    let mut output = properties.clone();
+    output.remove("$snapshot_data");
+    output.insert(
+        "distinct_id".to_string(),
+        Value::String(distinct_id.clone()),
+    );
+    output.insert("$session_id".to_string(), session_id_value);
+    output.insert("$window_id".to_string(), window_id_value);
+    output.insert("$snapshot_source".to_string(), snapshot_source);
+    output.insert("$snapshot_items".to_string(), Value::Array(snapshot_items));
+    output.insert("$lib".to_string(), Value::String(snapshot_library));
+
+    let mut extra = HashMap::new();
+    if let Some(offset) = object.get("offset").cloned() {
+        extra.insert("offset".to_string(), offset);
+    }
+
+    Ok(NormalizedSessionRecording {
+        event: "$snapshot_items".to_string(),
+        distinct_id,
+        api_key: Some(api_key),
+        timestamp: object.get("timestamp").and_then(recording_timestamp),
+        properties: Value::Object(output),
+        extra,
+    })
+}
+
+fn recording_api_key(
+    object: &serde_json::Map<String, Value>,
+    properties: Option<&serde_json::Map<String, Value>>,
+) -> Option<String> {
+    ["api_key", "token", "$token"]
+        .into_iter()
+        .find_map(|key| object.get(key).and_then(Value::as_str))
+        .or_else(|| {
+            properties.and_then(|props| {
+                ["api_key", "token", "$token"]
+                    .into_iter()
+                    .find_map(|key| props.get(key).and_then(Value::as_str))
+            })
+        })
+        .map(str::to_string)
+}
+
+fn recording_id_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.replace('\0', "\u{FFFD}"))
+            }
+        }
+        Value::Number(_) | Value::Bool(_) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn valid_session_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 70
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+}
+
+fn snapshot_items_from_value(value: &Value) -> Result<Vec<Value>, AppError> {
+    match value {
+        Value::Array(items) => Ok(items.clone()),
+        Value::Object(item) => Ok(vec![Value::Object(item.clone())]),
+        _ => Err(AppError::InvalidPayload(
+            "missing $snapshot_data".to_string(),
+        )),
+    }
+}
+
+fn recording_timestamp(value: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    match value {
+        Value::String(value) => chrono::DateTime::parse_from_rfc3339(value)
+            .ok()
+            .map(|timestamp| timestamp.with_timezone(&chrono::Utc)),
+        Value::Number(value) => value
+            .as_i64()
+            .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis),
+        _ => None,
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
