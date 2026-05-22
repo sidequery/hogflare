@@ -58,13 +58,19 @@
 
       .app {
         display: grid;
-        grid-template-columns: minmax(320px, 380px) minmax(560px, 1fr) minmax(330px, 420px);
+        --rail-track: minmax(320px, 380px);
+        --inspector-track: minmax(330px, 420px);
+        grid-template-columns: var(--rail-track) minmax(560px, 1fr) var(--inspector-track);
         height: 100vh;
         min-height: 0;
       }
 
+      .app.rail-collapsed {
+        --rail-track: 44px;
+      }
+
       .app.inspector-collapsed {
-        grid-template-columns: minmax(320px, 380px) minmax(560px, 1fr);
+        --inspector-track: 44px;
       }
 
       .rail,
@@ -76,8 +82,14 @@
 
       .rail {
         display: grid;
-        grid-template-rows: auto minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto;
         border-right: 1px solid var(--line);
+      }
+
+      .rail-content {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-height: 0;
       }
 
       .stage {
@@ -87,15 +99,22 @@
       }
 
       .app.inspector-collapsed .stage {
-        border-right: 0;
+        border-right: 1px solid var(--line);
       }
 
       .inspector {
         display: grid;
-        grid-template-rows: auto auto minmax(0, 1fr) auto;
+        grid-template-rows: minmax(0, 1fr) auto;
       }
 
-      .app.inspector-collapsed .inspector {
+      .inspector-content {
+        display: grid;
+        grid-template-rows: auto auto minmax(0, 1fr) auto;
+        min-height: 0;
+      }
+
+      .app.rail-collapsed .rail-content,
+      .app.inspector-collapsed .inspector-content {
         display: none;
       }
 
@@ -394,6 +413,79 @@
         font-size: 11px;
       }
 
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+      }
+
+      .panel-dock {
+        display: flex;
+        align-items: center;
+        min-height: 52px;
+        border-top: 1px solid transparent;
+        background: var(--surface);
+        padding: 10px;
+      }
+
+      .rail-dock {
+        justify-content: flex-end;
+      }
+
+      .inspector-dock {
+        justify-content: flex-start;
+      }
+
+      .panel-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid rgba(185, 194, 204, 0.72);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+        box-shadow: 0 4px 14px rgba(16, 24, 40, 0.08);
+        transition:
+          border-color 140ms ease,
+          color 140ms ease,
+          transform 140ms ease,
+          background 140ms ease;
+      }
+
+      .panel-toggle:focus-visible {
+        border-color: var(--accent);
+        box-shadow:
+          0 0 0 2px var(--accent-soft),
+          0 4px 14px rgba(16, 24, 40, 0.08);
+        outline: none;
+      }
+
+      .panel-toggle svg {
+        display: none;
+        width: 17px;
+        height: 17px;
+        stroke-width: 2;
+      }
+
+      .panel-toggle[data-state="expanded"] .panel-icon-expanded,
+      .panel-toggle[data-state="collapsed"] .panel-icon-collapsed {
+        display: block;
+      }
+
+      .app.rail-collapsed .panel-dock,
+      .app.inspector-collapsed .panel-dock {
+        align-items: flex-end;
+        justify-content: center;
+        min-height: 0;
+        border-top: 0;
+        padding: 10px 6px;
+      }
+
       @media (hover: hover) {
         .button:hover {
           background: #2a2d2a;
@@ -403,8 +495,12 @@
         .button.subtle:hover,
         .preset-button:hover,
         .row-button:hover,
-        .timeline-row:hover {
+        .timeline-row:hover,
+        .panel-toggle:hover {
           background: var(--surface-soft);
+          border-color: var(--line-strong);
+          color: var(--ink);
+          transform: translateY(-1px);
         }
       }
 
@@ -665,13 +761,19 @@
         }
 
         .app {
-          grid-template-columns: 340px minmax(0, 1fr);
+          --rail-track: 340px;
+          --inspector-track: minmax(0, 1fr);
+          grid-template-columns: var(--rail-track) minmax(0, 1fr);
           height: auto;
           min-height: 100vh;
         }
 
+        .app.rail-collapsed {
+          --rail-track: 44px;
+        }
+
         .app.inspector-collapsed {
-          grid-template-columns: 340px minmax(0, 1fr);
+          --inspector-track: minmax(0, 1fr);
         }
 
         .inspector {
@@ -679,13 +781,19 @@
           min-height: 520px;
           border-top: 1px solid var(--line);
         }
+
+        .app.inspector-collapsed .inspector {
+          min-height: 44px;
+        }
       }
 
       @media (max-width: 760px) {
         .app {
+          --rail-track: 1fr;
           grid-template-columns: 1fr;
         }
 
+        .app.rail-collapsed,
         .app.inspector-collapsed {
           grid-template-columns: 1fr;
         }
@@ -718,13 +826,14 @@
   </head>
   <body>
     <main class="app" id="app">
-      <aside class="rail">
-        <header class="topbar">
-          <h1>Replay Explorer</h1>
-          <span class="status" id="status">idle</span>
-        </header>
+      <aside class="rail" id="rail">
+        <div class="rail-content" id="railContent">
+          <header class="topbar">
+            <h1>Replay Explorer</h1>
+            <span class="status" id="status">idle</span>
+          </header>
 
-        <section class="rail-body">
+          <section class="rail-body">
           <form class="filters" id="filters">
             <div class="field wide">
               <label class="label" for="apiKey">API key</label>
@@ -851,7 +960,49 @@
             </div>
             <div class="result-list" id="results"></div>
           </div>
-        </section>
+          </section>
+        </div>
+        <div class="panel-dock rail-dock">
+          <button
+            class="panel-toggle"
+            id="toggleRail"
+            type="button"
+            aria-controls="railContent"
+            aria-expanded="true"
+            aria-label="Hide filters"
+            aria-pressed="false"
+            data-state="expanded"
+            title="Hide filters"
+          >
+            <span class="sr-only">Toggle filters</span>
+            <svg
+              class="panel-icon-expanded"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="4" y="5" width="16" height="14" rx="2" />
+              <path d="M9 5v14" />
+              <path d="m15 9-3 3 3 3" />
+            </svg>
+            <svg
+              class="panel-icon-collapsed"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="4" y="5" width="16" height="14" rx="2" />
+              <path d="M9 5v14" />
+              <path d="m12 9 3 3-3 3" />
+            </svg>
+          </button>
+        </div>
       </aside>
 
       <section class="stage">
@@ -863,16 +1014,6 @@
           <div class="actions">
             <button class="button secondary" id="copyLink" type="button">Copy link</button>
             <button class="button secondary" id="reload" type="button">Reload</button>
-            <button
-              class="button secondary"
-              id="toggleInspector"
-              type="button"
-              aria-controls="inspector"
-              aria-expanded="true"
-              aria-pressed="false"
-            >
-              Hide context
-            </button>
           </div>
         </header>
         <div class="player-wrap">
@@ -886,48 +1027,91 @@
       </section>
 
       <aside class="inspector" id="inspector">
-        <header class="inspector-head">
-          <h2>Session context</h2>
-        </header>
-        <section class="facts" aria-label="Session facts">
-          <div class="fact">
-            <span>User</span>
-            <strong id="detailDistinct">-</strong>
-          </div>
-          <div class="fact">
-            <span>API key</span>
-            <strong id="detailApiKey">-</strong>
-          </div>
-          <div class="fact">
-            <span>Duration</span>
-            <strong id="detailDuration">-</strong>
-          </div>
-          <div class="fact">
-            <span>Events</span>
-            <strong id="detailEvents">-</strong>
-          </div>
-          <div class="fact">
-            <span>Chunks</span>
-            <strong id="detailChunks">-</strong>
-          </div>
-          <div class="fact">
-            <span>First URL</span>
-            <strong id="detailUrl">-</strong>
-          </div>
-        </section>
-        <section class="timeline">
-          <div class="timeline-head">
-            <span class="label" id="timelineLabel">Activity timeline</span>
-            <span class="count" id="activityCount">0</span>
-          </div>
-          <div class="timeline-list" id="activity"></div>
-        </section>
-        <section class="debug" id="debug">
-          <div class="debug-head">
-            <button class="button subtle" id="debugToggle" type="button">Debug payload</button>
-          </div>
-          <pre id="debugPayload">-</pre>
-        </section>
+        <div class="inspector-content" id="inspectorContent">
+          <header class="inspector-head">
+            <h2>Session context</h2>
+          </header>
+          <section class="facts" aria-label="Session facts">
+            <div class="fact">
+              <span>User</span>
+              <strong id="detailDistinct">-</strong>
+            </div>
+            <div class="fact">
+              <span>API key</span>
+              <strong id="detailApiKey">-</strong>
+            </div>
+            <div class="fact">
+              <span>Duration</span>
+              <strong id="detailDuration">-</strong>
+            </div>
+            <div class="fact">
+              <span>Events</span>
+              <strong id="detailEvents">-</strong>
+            </div>
+            <div class="fact">
+              <span>Chunks</span>
+              <strong id="detailChunks">-</strong>
+            </div>
+            <div class="fact">
+              <span>First URL</span>
+              <strong id="detailUrl">-</strong>
+            </div>
+          </section>
+          <section class="timeline">
+            <div class="timeline-head">
+              <span class="label" id="timelineLabel">Activity timeline</span>
+              <span class="count" id="activityCount">0</span>
+            </div>
+            <div class="timeline-list" id="activity"></div>
+          </section>
+          <section class="debug" id="debug">
+            <div class="debug-head">
+              <button class="button subtle" id="debugToggle" type="button">Debug payload</button>
+            </div>
+            <pre id="debugPayload">-</pre>
+          </section>
+        </div>
+        <div class="panel-dock inspector-dock">
+          <button
+            class="panel-toggle"
+            id="toggleInspector"
+            type="button"
+            aria-controls="inspectorContent"
+            aria-expanded="true"
+            aria-label="Hide context"
+            aria-pressed="false"
+            data-state="expanded"
+            title="Hide context"
+          >
+            <span class="sr-only">Toggle context</span>
+            <svg
+              class="panel-icon-expanded"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="4" y="5" width="16" height="14" rx="2" />
+              <path d="M15 5v14" />
+              <path d="m9 9 3 3-3 3" />
+            </svg>
+            <svg
+              class="panel-icon-collapsed"
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <rect x="4" y="5" width="16" height="14" rx="2" />
+              <path d="M15 5v14" />
+              <path d="m12 9-3 3 3 3" />
+            </svg>
+          </button>
+        </div>
       </aside>
     </main>
 
@@ -948,6 +1132,7 @@
         submitButton: document.getElementById("submitButton"),
         clear: document.getElementById("clear"),
         reload: document.getElementById("reload"),
+        toggleRail: document.getElementById("toggleRail"),
         toggleInspector: document.getElementById("toggleInspector"),
         copyLink: document.getElementById("copyLink"),
         resultsLabel: document.getElementById("resultsLabel"),
@@ -989,6 +1174,7 @@
         playerWidth: 0,
         playerHeight: 0,
         playerResizeTimer: null,
+        railCollapsed: false,
         inspectorCollapsed: false,
       };
 
@@ -1805,10 +1991,23 @@
         setStatus("copied", true);
       }
 
+      function setRailCollapsed(collapsed) {
+        state.railCollapsed = collapsed;
+        els.app.classList.toggle("rail-collapsed", collapsed);
+        els.toggleRail.dataset.state = collapsed ? "collapsed" : "expanded";
+        els.toggleRail.setAttribute("aria-label", collapsed ? "Show filters" : "Hide filters");
+        els.toggleRail.setAttribute("title", collapsed ? "Show filters" : "Hide filters");
+        els.toggleRail.setAttribute("aria-pressed", String(collapsed));
+        els.toggleRail.setAttribute("aria-expanded", String(!collapsed));
+        window.requestAnimationFrame(schedulePlayerResize);
+      }
+
       function setInspectorCollapsed(collapsed) {
         state.inspectorCollapsed = collapsed;
         els.app.classList.toggle("inspector-collapsed", collapsed);
-        els.toggleInspector.textContent = collapsed ? "Show context" : "Hide context";
+        els.toggleInspector.dataset.state = collapsed ? "collapsed" : "expanded";
+        els.toggleInspector.setAttribute("aria-label", collapsed ? "Show context" : "Hide context");
+        els.toggleInspector.setAttribute("title", collapsed ? "Show context" : "Hide context");
         els.toggleInspector.setAttribute("aria-pressed", String(collapsed));
         els.toggleInspector.setAttribute("aria-expanded", String(!collapsed));
         window.requestAnimationFrame(schedulePlayerResize);
@@ -1857,6 +2056,7 @@
       els.frictionMode.addEventListener("click", () => switchMode("friction"));
       els.personMode.addEventListener("click", () => switchMode("person"));
       els.reload.addEventListener("click", runSearch);
+      els.toggleRail.addEventListener("click", () => setRailCollapsed(!state.railCollapsed));
       els.toggleInspector.addEventListener("click", () =>
         setInspectorCollapsed(!state.inspectorCollapsed),
       );
