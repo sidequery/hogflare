@@ -599,12 +599,25 @@
       .player-wrap {
         min-height: 0;
         overflow: auto;
-        padding: 16px;
       }
 
       #player {
+        min-height: 0;
         width: 100%;
-        min-height: 320px;
+      }
+
+      #player .rr-player {
+        background: var(--surface) !important;
+        border-radius: 0 !important;
+        box-shadow: none !important;
+        margin: 0 !important;
+        width: 100% !important;
+      }
+
+      #player .rr-player__frame,
+      #player .replayer-wrapper {
+        border-radius: 0 !important;
+        box-shadow: none !important;
       }
 
       .empty,
@@ -1178,6 +1191,8 @@
         inspectorCollapsed: false,
       };
 
+      const playerControllerHeight = 80;
+
       const modes = {
         sessions: { label: "Recent sessions" },
         events: { label: "Analytics events" },
@@ -1397,6 +1412,7 @@
         state.playerAnchorMs = 0;
         state.playerWidth = 0;
         state.playerHeight = 0;
+        els.player.style.minHeight = "";
         els.player.innerHTML = "";
         const wrap = document.createElement("div");
         wrap.className = kind === "error" ? "error" : "empty";
@@ -1922,6 +1938,7 @@
         const { width, height } = playerDimensions();
         state.playerWidth = width;
         state.playerHeight = height;
+        els.player.style.minHeight = `${height + playerControllerHeight}px`;
         state.player = new rrwebPlayer({
           target: els.player,
           props: {
@@ -1932,6 +1949,7 @@
             showController: true,
           },
         });
+        fitReplayViewport();
         seekPlayer(state.playerAnchorMs);
       }
 
@@ -1945,9 +1963,40 @@
 
       function playerDimensions() {
         const wrap = els.player.parentElement;
-        const width = Math.max(640, Math.floor((wrap?.clientWidth || 0) - 32));
-        const height = Math.max(360, Math.round(width * 0.5625));
+        const width = Math.max(320, Math.floor(wrap?.clientWidth || els.player.clientWidth || 960));
+        const availableHeight = Math.floor(wrap?.clientHeight || els.player.clientHeight || 0);
+        const aspectRatio = playerAspectRatio();
+        const fullWidthHeight = Math.round(width / aspectRatio);
+        const constrainedHeight =
+          availableHeight > playerControllerHeight + 240
+            ? Math.min(fullWidthHeight, availableHeight - playerControllerHeight)
+            : fullWidthHeight;
+        const height = Math.max(240, constrainedHeight);
         return { width, height };
+      }
+
+      function playerAspectRatio() {
+        const meta = state.playerEvents.find(
+          (event) => event?.type === 4 && event?.data?.width > 0 && event?.data?.height > 0,
+        );
+        if (!meta) return 16 / 9;
+        return meta.data.width / meta.data.height;
+      }
+
+      function fitReplayViewport() {
+        const applyFit = () => {
+          const frame = els.player.querySelector(".rr-player__frame");
+          const wrapper = els.player.querySelector(".replayer-wrapper");
+          if (!frame || !wrapper) return;
+          const naturalWidth = wrapper.offsetWidth;
+          const naturalHeight = wrapper.offsetHeight;
+          if (!naturalWidth || !naturalHeight) return;
+          const scale = Math.min(frame.clientWidth / naturalWidth, frame.clientHeight / naturalHeight);
+          wrapper.style.transform = `scale(${scale}) translate(-50%, -50%)`;
+        };
+        window.requestAnimationFrame(applyFit);
+        window.setTimeout(applyFit, 0);
+        window.setTimeout(applyFit, 180);
       }
 
       function resizePlayer() {
@@ -1968,14 +2017,15 @@
           try {
             if (state.player?.goto) {
               state.player.goto(offset, false);
-              return;
-            }
-            const replayer = state.player?.getReplayer?.();
-            if (replayer?.play && replayer?.pause) {
-              replayer.play(offset);
-              window.setTimeout(() => replayer.pause(), 40);
+            } else if (state.player?.getReplayer) {
+              const replayer = state.player.getReplayer();
+              if (replayer?.play && replayer?.pause) {
+                replayer.play(offset);
+                window.setTimeout(() => replayer.pause(), 40);
+              }
             }
           } catch (_) {}
+          fitReplayViewport();
         }, 100);
       }
 
