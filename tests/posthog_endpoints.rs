@@ -933,6 +933,8 @@ async fn replay_ui_lists_and_loads_session_events() -> Result<(), Box<dyn std::e
     assert!(ui_response.status().is_success());
     let ui = ui_response.text().await?;
     assert!(ui.contains("Replay Explorer"));
+    assert!(ui.contains("aria-label=\"Hogflare\""));
+    assert!(ui.contains("id=\"status\" hidden"));
     assert!(ui.contains("Activity timeline"));
     assert!(ui.contains("Date range"));
     assert!(ui.contains("type=\"datetime-local\""));
