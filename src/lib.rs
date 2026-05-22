@@ -7,13 +7,14 @@ pub mod importer;
 pub mod models;
 pub mod persons;
 pub mod pipeline;
+pub mod replay;
 
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
@@ -33,6 +34,10 @@ use persons::{
     NoopPersonStore, PersonAlias, PersonError, PersonStore, PersonUpdate,
 };
 use pipeline::{PersonPipelineRecord, PipelineClient, PipelineError, PipelineEvent};
+use replay::{
+    ReplayClient, ReplayError, ReplayEventsQuery, ReplayFrictionQuery, ReplayFunnelQuery,
+    ReplayPersonQuery, ReplaySessionEventsQuery, ReplaySessionsQuery,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
@@ -57,6 +62,7 @@ use tower_service::Service;
 pub(crate) struct AppState {
     pub(crate) pipeline: Arc<PipelineClient>,
     pub(crate) persons_pipeline: Option<Arc<PipelineClient>>,
+    pub(crate) replay: Option<Arc<ReplayClient>>,
     pub(crate) posthog_team_id: Option<i64>,
     pub(crate) decide_api_token: Option<String>,
     pub(crate) session_recording_endpoint: Option<String>,
@@ -168,6 +174,12 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
             .map(Arc::new)
         })
         .transpose()?;
+    let replay = config
+        .replay
+        .clone()
+        .map(ReplayClient::new)
+        .transpose()?
+        .map(Arc::new);
 
     info!(
         endpoint = %config.pipeline_endpoint,
@@ -187,10 +199,11 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
     let listener = TcpListener::bind(config.address).await?;
     info!(address = %config.address, "listening for requests");
 
-    serve_with_person_pipeline(
+    serve_with_person_pipeline_and_replay(
         listener,
         Arc::new(pipeline),
         persons_pipeline,
+        replay,
         config.posthog_team_id,
         Arc::new(NoopGroupStore),
         GroupTypeMap::new(config.posthog_group_types.clone()),
@@ -259,10 +272,25 @@ pub async fn fetch(
     let group_store: Arc<dyn GroupStore> = groups::store_from_env(&env);
     let group_type_map = GroupTypeMap::new(config.posthog_group_types.clone());
     let feature_flags = Arc::new(config.feature_flags);
+    let replay = match config.replay.clone() {
+        Some(config) => match ReplayClient::new(config) {
+            Ok(client) => Some(Arc::new(client)),
+            Err(err) => {
+                error!(error = %err, "failed to create replay client");
+                let body = Json(ErrorResponse {
+                    status: 0,
+                    error: err.to_string(),
+                });
+                return Ok((StatusCode::INTERNAL_SERVER_ERROR, body).into_response());
+            }
+        },
+        None => None,
+    };
 
-    let mut router = build_router_with_person_pipeline(
+    let mut router = build_router_with_person_pipeline_and_replay(
         Arc::new(pipeline),
         persons_pipeline,
+        replay,
         config.posthog_team_id,
         group_store,
         group_type_map,
@@ -332,9 +360,40 @@ pub fn build_router_with_person_pipeline(
     feature_flags: Arc<FeatureFlagStore>,
     person_store: Arc<dyn PersonStore>,
 ) -> Router {
+    build_router_with_person_pipeline_and_replay(
+        pipeline,
+        persons_pipeline,
+        None,
+        posthog_team_id,
+        group_store,
+        group_type_map,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        person_debug_token,
+        feature_flags,
+        person_store,
+    )
+}
+
+pub fn build_router_with_person_pipeline_and_replay(
+    pipeline: Arc<PipelineClient>,
+    persons_pipeline: Option<Arc<PipelineClient>>,
+    replay: Option<Arc<ReplayClient>>,
+    posthog_team_id: Option<i64>,
+    group_store: Arc<dyn GroupStore>,
+    group_type_map: GroupTypeMap,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    person_debug_token: Option<String>,
+    feature_flags: Arc<FeatureFlagStore>,
+    person_store: Arc<dyn PersonStore>,
+) -> Router {
     router(build_state(
         pipeline,
         persons_pipeline,
+        replay,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -353,6 +412,7 @@ pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Resu
         listener,
         build_state(
             pipeline,
+            None,
             None,
             None,
             Arc::new(NoopGroupStore),
@@ -411,9 +471,42 @@ pub async fn serve_with_person_pipeline(
     person_debug_token: Option<String>,
     feature_flags: Arc<FeatureFlagStore>,
 ) -> Result<(), RunError> {
+    serve_with_person_pipeline_and_replay(
+        listener,
+        pipeline,
+        persons_pipeline,
+        None,
+        posthog_team_id,
+        group_store,
+        group_type_map,
+        decide_api_token,
+        session_recording_endpoint,
+        signing_secret,
+        person_debug_token,
+        feature_flags,
+    )
+    .await
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn serve_with_person_pipeline_and_replay(
+    listener: TcpListener,
+    pipeline: Arc<PipelineClient>,
+    persons_pipeline: Option<Arc<PipelineClient>>,
+    replay: Option<Arc<ReplayClient>>,
+    posthog_team_id: Option<i64>,
+    group_store: Arc<dyn GroupStore>,
+    group_type_map: GroupTypeMap,
+    decide_api_token: Option<String>,
+    session_recording_endpoint: Option<String>,
+    signing_secret: Option<String>,
+    person_debug_token: Option<String>,
+    feature_flags: Arc<FeatureFlagStore>,
+) -> Result<(), RunError> {
     let state = build_state(
         pipeline,
         persons_pipeline,
+        replay,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -445,6 +538,17 @@ fn router(state: AppState) -> Router {
         .route("/array/:token/config.js", get(array_config_js))
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
+        .route("/replay", get(replay_ui))
+        .route("/replay/", get(replay_ui))
+        .route("/replay/api/sessions", get(replay_sessions))
+        .route("/replay/api/events", get(replay_events))
+        .route("/replay/api/funnels", get(replay_funnels))
+        .route("/replay/api/friction", get(replay_friction))
+        .route("/replay/api/person", get(replay_person))
+        .route(
+            "/replay/api/sessions/:session_id",
+            get(replay_session_events),
+        )
         .route("/__debug/person/:id", get(debug_person))
         .route("/healthz", get(health))
         .with_state(state);
@@ -462,6 +566,7 @@ fn router(state: AppState) -> Router {
 fn build_state(
     pipeline: Arc<PipelineClient>,
     persons_pipeline: Option<Arc<PipelineClient>>,
+    replay: Option<Arc<ReplayClient>>,
     posthog_team_id: Option<i64>,
     group_store: Arc<dyn GroupStore>,
     group_type_map: GroupTypeMap,
@@ -475,6 +580,7 @@ fn build_state(
     AppState {
         pipeline,
         persons_pipeline,
+        replay,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -1621,6 +1727,133 @@ async fn health() -> impl IntoResponse {
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn replay_ui() -> impl IntoResponse {
+    Html(replay::replay_ui_html())
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn replay_sessions(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ReplaySessionsQuery>,
+) -> impl IntoResponse {
+    let Some(client) = state.replay.as_ref() else {
+        return replay_error_response(ReplayError::NotConfigured);
+    };
+
+    match client.list_sessions(query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => replay_error_response(err),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn replay_events(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ReplayEventsQuery>,
+) -> impl IntoResponse {
+    let Some(client) = state.replay.as_ref() else {
+        return replay_error_response(ReplayError::NotConfigured);
+    };
+
+    match client.search_events(query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => replay_error_response(err),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn replay_funnels(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ReplayFunnelQuery>,
+) -> impl IntoResponse {
+    let Some(client) = state.replay.as_ref() else {
+        return replay_error_response(ReplayError::NotConfigured);
+    };
+
+    match client.search_funnel(query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => replay_error_response(err),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn replay_friction(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ReplayFrictionQuery>,
+) -> impl IntoResponse {
+    let Some(client) = state.replay.as_ref() else {
+        return replay_error_response(ReplayError::NotConfigured);
+    };
+
+    match client.search_friction(query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => replay_error_response(err),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn replay_person(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ReplayPersonQuery>,
+) -> impl IntoResponse {
+    let Some(client) = state.replay.as_ref() else {
+        return replay_error_response(ReplayError::NotConfigured);
+    };
+
+    match client.person_journey(query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => replay_error_response(err),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn replay_session_events(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<ReplaySessionEventsQuery>,
+) -> impl IntoResponse {
+    let Some(client) = state.replay.as_ref() else {
+        return replay_error_response(ReplayError::NotConfigured);
+    };
+
+    match client.get_session(&session_id, query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => replay_error_response(err),
+    }
+}
+
+fn replay_error_response(err: ReplayError) -> axum::response::Response {
+    let status = match &err {
+        ReplayError::NotConfigured => StatusCode::SERVICE_UNAVAILABLE,
+        ReplayError::SessionNotFound(_) => StatusCode::NOT_FOUND,
+        ReplayError::UnexpectedResponse { .. }
+        | ReplayError::Transport(_)
+        | ReplayError::InvalidResponse(_)
+        | ReplayError::MissingRows
+        | ReplayError::InvalidRow(_) => StatusCode::BAD_GATEWAY,
+        #[cfg(not(target_arch = "wasm32"))]
+        ReplayError::ClientBuild(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        #[cfg(target_arch = "wasm32")]
+        ReplayError::RequestBuild(_) | ReplayError::Serialize(_) => {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    };
+
+    if status.is_server_error() {
+        error!(error = %err, "replay request failed");
+    }
+
+    (
+        status,
+        Json(ErrorResponse {
+            status: 0,
+            error: err.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
 async fn debug_person(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1658,6 +1891,8 @@ pub enum RunError {
     Config(#[from] ConfigError),
     #[error(transparent)]
     Pipeline(#[from] PipelineError),
+    #[error(transparent)]
+    Replay(#[from] ReplayError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
     #[error("server error: {0}")]

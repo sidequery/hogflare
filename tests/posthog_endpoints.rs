@@ -6,11 +6,11 @@ use chrono::Utc;
 use flate2::{write::GzEncoder, Compression};
 use helpers::{
     cleanup, spawn_app_with_options, spawn_app_with_options_and_debug,
-    spawn_app_with_options_debug_and_person_pipeline, spawn_app_with_runtime_options,
-    spawn_pipeline_stub, wait_for_events,
+    spawn_app_with_options_debug_and_person_pipeline, spawn_app_with_replay,
+    spawn_app_with_runtime_options, spawn_pipeline_stub, spawn_replay_sql_stub, wait_for_events,
 };
 use hmac::{Hmac, Mac};
-use hogflare::{feature_flags::FeatureFlagStore, groups::GroupTypeMap};
+use hogflare::{feature_flags::FeatureFlagStore, groups::GroupTypeMap, replay::ReplayConfig};
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Value};
 use sha2::Sha256;
@@ -769,6 +769,313 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
     assert_eq!(health_body["status"], "ok");
 
     cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replay_ui_lists_and_loads_session_events() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = vec![
+        json!({
+            "uuid": "chunk-2",
+            "event": "$snapshot_items",
+            "distinct_id": "replay-user",
+            "created_at": "2026-05-22T10:00:02Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "session-1",
+                "$snapshot_items": [
+                    { "type": 4, "timestamp": 2000, "data": { "href": "https://app.test/page" } }
+                ]
+            }
+        }),
+        json!({
+            "uuid": "chunk-1",
+            "event": "$snapshot_items",
+            "distinct_id": "replay-user",
+            "created_at": "2026-05-22T10:00:01Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "session-1",
+                "$snapshot_items": [
+                    { "type": 2, "timestamp": 1000, "data": { "node": { "id": 1 } } }
+                ]
+            }
+        }),
+        json!({
+            "uuid": "chunk-other",
+            "event": "$snapshot",
+            "distinct_id": "other-user",
+            "created_at": "2026-05-22T10:00:03Z",
+            "api_key": "phc_other",
+            "properties": {
+                "session_id": "session-other",
+                "events": [
+                    { "type": 4, "timestamp": 3000, "data": {} }
+                ]
+            }
+        }),
+        json!({
+            "uuid": "event-1",
+            "event": "Checkout Started",
+            "distinct_id": "replay-user",
+            "created_at": "2026-05-22T10:00:02Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "session-1",
+                "$current_url": "https://app.test/page",
+                "plan": "pro"
+            }
+        }),
+        json!({
+            "uuid": "funnel-1",
+            "event": "Viewed Pricing",
+            "distinct_id": "funnel-user",
+            "created_at": "2026-05-22T10:01:00Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "funnel-session",
+                "$current_url": "https://app.test/pricing"
+            }
+        }),
+        json!({
+            "uuid": "funnel-2",
+            "event": "Checkout Started",
+            "distinct_id": "funnel-user",
+            "created_at": "2026-05-22T10:01:10Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "funnel-session",
+                "$current_url": "https://app.test/checkout"
+            }
+        }),
+        json!({
+            "uuid": "funnel-3",
+            "event": "Viewed Pricing",
+            "distinct_id": "stuck-user",
+            "created_at": "2026-05-22T10:02:00Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "stuck-session",
+                "$current_url": "https://app.test/pricing"
+            }
+        }),
+        json!({
+            "uuid": "funnel-4",
+            "event": "Viewed Pricing",
+            "distinct_id": "stuck-user",
+            "created_at": "2026-05-22T10:02:03Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "stuck-session",
+                "$current_url": "https://app.test/pricing"
+            }
+        }),
+        json!({
+            "uuid": "chunk-friction",
+            "event": "$snapshot_items",
+            "distinct_id": "friction-user",
+            "created_at": "2026-05-22T10:03:00Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "friction-session",
+                "$snapshot_items": [
+                    { "type": 4, "timestamp": 1000, "data": { "href": "https://app.test/pricing" } },
+                    { "type": 3, "timestamp": 1100, "data": { "source": 2, "type": 2, "x": 42, "y": 52 } },
+                    { "type": 3, "timestamp": 1700, "data": { "source": 2, "type": 2, "x": 44, "y": 50 } },
+                    { "type": 3, "timestamp": 2200, "data": { "source": 2, "type": 2, "x": 43, "y": 51 } },
+                    { "type": 3, "timestamp": 40000, "data": { "source": 3, "x": 0, "y": 1600 } }
+                ]
+            }
+        }),
+        json!({
+            "uuid": "chunk-journey",
+            "event": "$snapshot_items",
+            "distinct_id": "journey-user",
+            "created_at": "2026-05-22T10:04:00Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "journey-session",
+                "$snapshot_items": [
+                    { "type": 4, "timestamp": 1000, "data": { "href": "https://app.test/start" } }
+                ]
+            }
+        }),
+        json!({
+            "uuid": "journey-event",
+            "event": "Product Viewed",
+            "distinct_id": "journey-user",
+            "created_at": "2026-05-22T10:04:10Z",
+            "api_key": "phc_replay",
+            "properties": {
+                "$session_id": "journey-session",
+                "$current_url": "https://app.test/product",
+                "sku": "sku_123"
+            }
+        }),
+    ];
+
+    let (pipeline_endpoint, _pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (replay_endpoint, mut replay_queries, replay_handle) = spawn_replay_sql_stub(rows).await?;
+    let replay_config = ReplayConfig::new(
+        "account-id".to_string(),
+        "bucket-name".to_string(),
+        "r2-sql-token".to_string(),
+        Some("default.hogflare_events".to_string()),
+        Some(500),
+        Some(replay_endpoint),
+    )?;
+    let (address, server_handle) = spawn_app_with_replay(pipeline_endpoint, replay_config).await?;
+
+    let base_url = format!("http://{}", address);
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+
+    let ui_response = client.get(format!("{}/replay", base_url)).send().await?;
+    assert!(ui_response.status().is_success());
+    let ui = ui_response.text().await?;
+    assert!(ui.contains("Replay Explorer"));
+    assert!(ui.contains("aria-label=\"Hogflare\""));
+    assert!(ui.contains("id=\"status\" hidden"));
+    assert!(ui.contains("Activity timeline"));
+    assert!(ui.contains("Date range"));
+    assert!(ui.contains("type=\"datetime-local\""));
+    assert!(ui.contains("data-date-preset=\"24h\""));
+    assert!(ui.contains("aria-label=\"Hide filters\""));
+    assert!(ui.contains("aria-label=\"Hide context\""));
+    assert!(ui.contains(">Search<"));
+    assert!(ui.contains("Funnel steps"));
+    assert!(ui.contains("Friction signal"));
+    assert!(ui.contains("Person journey"));
+    assert!(ui.contains("rrweb-player"));
+    assert!(!ui.contains("Raw summary"));
+
+    let sessions_response = client
+        .get(format!("{}/replay/api/sessions", base_url))
+        .query(&[
+            ("api_key", "phc_replay"),
+            ("distinct_id", "replay-user"),
+            ("limit", "25"),
+        ])
+        .send()
+        .await?;
+    assert!(sessions_response.status().is_success());
+    let sessions: Value = sessions_response.json().await?;
+    assert_eq!(sessions["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(sessions["sessions"][0]["session_id"], "session-1");
+    assert_eq!(sessions["sessions"][0]["chunk_count"], 2);
+    assert_eq!(sessions["sessions"][0]["event_count"], 2);
+    assert_eq!(sessions["sessions"][0]["duration_ms"], 1000);
+
+    let first_query = tokio::time::timeout(Duration::from_secs(2), replay_queries.recv())
+        .await?
+        .expect("expected replay sql query");
+    assert!(first_query.contains("from default.hogflare_events"));
+    assert!(first_query.contains("api_key = 'phc_replay'"));
+    assert!(first_query.contains("distinct_id = 'replay-user'"));
+    assert!(first_query.contains("event in ('$snapshot', '$snapshot_items')"));
+
+    let replay_events_response = client
+        .get(format!("{}/replay/api/events", base_url))
+        .query(&[
+            ("api_key", "phc_replay"),
+            ("distinct_id", "replay-user"),
+            ("event_name", "Checkout Started"),
+            ("url", "page"),
+        ])
+        .send()
+        .await?;
+    assert!(replay_events_response.status().is_success());
+    let replay_events: Value = replay_events_response.json().await?;
+    assert_eq!(replay_events["events"].as_array().unwrap().len(), 1);
+    assert_eq!(replay_events["events"][0]["event"], "Checkout Started");
+    assert_eq!(replay_events["events"][0]["session_id"], "session-1");
+    assert_eq!(replay_events["events"][0]["url"], "https://app.test/page");
+    assert_eq!(
+        replay_events["events"][0]["properties"][0]["key"],
+        "$current_url"
+    );
+
+    let event_query = tokio::time::timeout(Duration::from_secs(2), replay_queries.recv())
+        .await?
+        .expect("expected replay event sql query");
+    assert!(event_query.contains("event not in ('$snapshot', '$snapshot_items')"));
+    assert!(event_query.contains("event = 'Checkout Started'"));
+
+    let events_response = client
+        .get(format!("{}/replay/api/sessions/session-1", base_url))
+        .query(&[
+            ("api_key", "phc_replay"),
+            ("distinct_id", "replay-user"),
+            ("at_ms", "250"),
+        ])
+        .send()
+        .await?;
+    assert!(events_response.status().is_success());
+    let events: Value = events_response.json().await?;
+    assert_eq!(events["session"]["session_id"], "session-1");
+    assert_eq!(events["chunks"].as_array().unwrap().len(), 2);
+    assert_eq!(events["events"].as_array().unwrap().len(), 2);
+    assert_eq!(events["activity"].as_array().unwrap().len(), 2);
+    assert_eq!(events["replay_anchor_ms"], 250);
+    assert_eq!(events["events"][0]["timestamp"], 1000);
+    assert_eq!(events["events"][1]["timestamp"], 2000);
+
+    let funnel_response = client
+        .get(format!("{}/replay/api/funnels", base_url))
+        .query(&[
+            ("api_key", "phc_replay"),
+            ("steps", "Viewed Pricing,Checkout Started"),
+            ("limit", "25"),
+        ])
+        .send()
+        .await?;
+    assert!(funnel_response.status().is_success());
+    let funnel: Value = funnel_response.json().await?;
+    assert_eq!(funnel["steps"].as_array().unwrap().len(), 2);
+    assert!(funnel["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(
+            |session| session["session_id"] == "funnel-session" && session["status"] == "converted"
+        ));
+    assert!(funnel["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|session| session["session_id"] == "stuck-session" && session["status"] == "stuck"));
+
+    let friction_response = client
+        .get(format!("{}/replay/api/friction", base_url))
+        .query(&[("api_key", "phc_replay"), ("distinct_id", "friction-user")])
+        .send()
+        .await?;
+    assert!(friction_response.status().is_success());
+    let friction: Value = friction_response.json().await?;
+    assert_eq!(friction["sessions"].as_array().unwrap().len(), 1);
+    assert!(friction["sessions"][0]["signals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|signal| signal["kind"] == "rage_click"));
+
+    let person_response = client
+        .get(format!("{}/replay/api/person", base_url))
+        .query(&[("api_key", "phc_replay"), ("distinct_id", "journey-user")])
+        .send()
+        .await?;
+    assert!(person_response.status().is_success());
+    let person: Value = person_response.json().await?;
+    assert_eq!(person["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(person["events"].as_array().unwrap().len(), 1);
+    assert!(person["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["kind"] == "event" && item["title"] == "Product Viewed"));
+
+    cleanup(server_handle, pipeline_handle).await;
+    replay_handle.abort();
+    let _ = replay_handle.await;
     Ok(())
 }
 

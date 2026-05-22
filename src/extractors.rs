@@ -909,6 +909,7 @@ mod tests {
         AppState {
             pipeline: Arc::new(pipeline),
             persons_pipeline: None,
+            replay: None,
             posthog_team_id: None,
             decide_api_token: None,
             session_recording_endpoint: None,
