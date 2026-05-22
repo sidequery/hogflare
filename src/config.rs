@@ -7,6 +7,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::feature_flags::FeatureFlagStore;
+use crate::replay::{ReplayConfig, ReplayConfigError};
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -20,6 +21,7 @@ pub struct Config {
     pub posthog_group_types: [Option<String>; 5],
     pub posthog_project_api_key: Option<String>,
     pub session_recording_endpoint: Option<String>,
+    pub replay: Option<ReplayConfig>,
     pub posthog_signing_secret: Option<String>,
     pub person_debug_token: Option<String>,
     pub feature_flags: FeatureFlagStore,
@@ -39,6 +41,8 @@ pub enum ConfigError {
     InvalidTeamId { value: String, message: String },
     #[error("failed to parse HOGFLARE_FEATURE_FLAGS: {0}")]
     InvalidFeatureFlags(String),
+    #[error(transparent)]
+    Replay(#[from] ReplayConfigError),
 }
 
 impl Config {
@@ -131,6 +135,7 @@ impl Config {
             .var("POSTHOG_SESSION_RECORDING_ENDPOINT")
             .ok()
             .map(|v| v.to_string());
+        let replay = replay_config_from_worker_env(env)?;
         let posthog_signing_secret = env
             .secret("POSTHOG_SIGNING_SECRET")
             .ok()
@@ -168,6 +173,7 @@ impl Config {
             posthog_group_types,
             posthog_project_api_key,
             session_recording_endpoint,
+            replay,
             posthog_signing_secret,
             person_debug_token,
             feature_flags,
@@ -262,6 +268,7 @@ impl Config {
 
         let posthog_project_api_key = env::var("POSTHOG_API_KEY").ok();
         let session_recording_endpoint = env::var("POSTHOG_SESSION_RECORDING_ENDPOINT").ok();
+        let replay = replay_config_from_env()?;
         let posthog_signing_secret = env::var("POSTHOG_SIGNING_SECRET").ok();
         let person_debug_token = env::var("PERSON_DEBUG_TOKEN").ok();
         let feature_flags = match env::var("HOGFLARE_FEATURE_FLAGS") {
@@ -286,9 +293,122 @@ impl Config {
             posthog_group_types,
             posthog_project_api_key,
             session_recording_endpoint,
+            replay,
             posthog_signing_secret,
             person_debug_token,
             feature_flags,
         })
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn replay_config_from_worker_env(env: &worker::Env) -> Result<Option<ReplayConfig>, ConfigError> {
+    let account_id = env
+        .var("HOGFLARE_REPLAY_ACCOUNT_ID")
+        .ok()
+        .map(|value| value.to_string());
+    let bucket_name = env
+        .var("HOGFLARE_REPLAY_BUCKET")
+        .ok()
+        .map(|value| value.to_string());
+    let auth_token = env
+        .secret("HOGFLARE_REPLAY_R2_SQL_TOKEN")
+        .ok()
+        .map(|secret| secret.to_string())
+        .or_else(|| {
+            env.var("HOGFLARE_REPLAY_R2_SQL_TOKEN")
+                .ok()
+                .map(|value| value.to_string())
+        });
+
+    let configured = account_id.is_some() || bucket_name.is_some() || auth_token.is_some();
+    if !configured {
+        return Ok(None);
+    }
+
+    let events_table = env
+        .var("HOGFLARE_REPLAY_EVENTS_TABLE")
+        .ok()
+        .map(|value| value.to_string());
+    let query_limit = parse_replay_query_limit(
+        env.var("HOGFLARE_REPLAY_QUERY_LIMIT")
+            .ok()
+            .map(|value| value.to_string()),
+    )?;
+    let endpoint = parse_optional_url(
+        "HOGFLARE_REPLAY_R2_SQL_ENDPOINT",
+        env.var("HOGFLARE_REPLAY_R2_SQL_ENDPOINT")
+            .ok()
+            .map(|value| value.to_string()),
+    )?;
+
+    ReplayConfig::new(
+        account_id.ok_or(ConfigError::MissingVar("HOGFLARE_REPLAY_ACCOUNT_ID"))?,
+        bucket_name.ok_or(ConfigError::MissingVar("HOGFLARE_REPLAY_BUCKET"))?,
+        auth_token.ok_or(ConfigError::MissingVar("HOGFLARE_REPLAY_R2_SQL_TOKEN"))?,
+        events_table,
+        query_limit,
+        endpoint,
+    )
+    .map(Some)
+    .map_err(ConfigError::from)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn replay_config_from_env() -> Result<Option<ReplayConfig>, ConfigError> {
+    let account_id = env::var("HOGFLARE_REPLAY_ACCOUNT_ID").ok();
+    let bucket_name = env::var("HOGFLARE_REPLAY_BUCKET").ok();
+    let auth_token = env::var("HOGFLARE_REPLAY_R2_SQL_TOKEN").ok();
+
+    let configured = account_id.is_some() || bucket_name.is_some() || auth_token.is_some();
+    if !configured {
+        return Ok(None);
+    }
+
+    let events_table = env::var("HOGFLARE_REPLAY_EVENTS_TABLE").ok();
+    let query_limit = parse_replay_query_limit(env::var("HOGFLARE_REPLAY_QUERY_LIMIT").ok())?;
+    let endpoint = parse_optional_url(
+        "HOGFLARE_REPLAY_R2_SQL_ENDPOINT",
+        env::var("HOGFLARE_REPLAY_R2_SQL_ENDPOINT").ok(),
+    )?;
+
+    ReplayConfig::new(
+        account_id.ok_or(ConfigError::MissingVar("HOGFLARE_REPLAY_ACCOUNT_ID"))?,
+        bucket_name.ok_or(ConfigError::MissingVar("HOGFLARE_REPLAY_BUCKET"))?,
+        auth_token.ok_or(ConfigError::MissingVar("HOGFLARE_REPLAY_R2_SQL_TOKEN"))?,
+        events_table,
+        query_limit,
+        endpoint,
+    )
+    .map(Some)
+    .map_err(ConfigError::from)
+}
+
+fn parse_replay_query_limit(value: Option<String>) -> Result<Option<usize>, ConfigError> {
+    value
+        .map(|value| {
+            value.parse::<usize>().map_err(|err| {
+                ConfigError::Replay(ReplayConfigError::InvalidQueryLimit {
+                    value,
+                    message: err.to_string(),
+                })
+            })
+        })
+        .transpose()
+}
+
+fn parse_optional_url(
+    name: &'static str,
+    value: Option<String>,
+) -> Result<Option<Url>, ConfigError> {
+    value
+        .map(|value| {
+            Url::parse(&value).map_err(|err| {
+                ConfigError::Replay(ReplayConfigError::InvalidEndpoint {
+                    value: format!("{name}={value}"),
+                    message: err.to_string(),
+                })
+            })
+        })
+        .transpose()
 }

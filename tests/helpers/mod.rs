@@ -5,7 +5,7 @@ use std::{net::SocketAddr, sync::Arc, time::Duration};
 use axum::{extract::State, http::StatusCode, routing::post, Json, Router};
 use hogflare::pipeline::PipelineClient;
 use reqwest::{Client, Url};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::{
     net::TcpListener,
     process::Command,
@@ -44,6 +44,45 @@ pub async fn spawn_pipeline_stub(
     let handle = tokio::spawn(async move {
         if let Err(err) = axum::serve(listener, app.into_make_service()).await {
             eprintln!("pipeline stub terminated: {err}");
+        }
+    });
+
+    Ok((endpoint, receiver, handle))
+}
+
+pub async fn spawn_replay_sql_stub(
+    rows: Vec<Value>,
+) -> Result<(Url, mpsc::Receiver<String>, JoinHandle<()>), Box<dyn std::error::Error>> {
+    let (sender, receiver) = mpsc::channel(16);
+
+    #[derive(Clone)]
+    struct StubState {
+        rows: Vec<Value>,
+        sender: mpsc::Sender<String>,
+    }
+
+    async fn handle_query(
+        State(state): State<StubState>,
+        Json(payload): Json<Value>,
+    ) -> Json<Value> {
+        if let Some(query) = payload.get("query").and_then(Value::as_str) {
+            let _ = state.sender.send(query.to_string()).await;
+        }
+
+        Json(json!({ "result": { "rows": state.rows } }))
+    }
+
+    let app = Router::new()
+        .route("/", post(handle_query))
+        .with_state(StubState { rows, sender });
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let endpoint = Url::parse(&format!("http://{}/", address))?;
+
+    let handle = tokio::spawn(async move {
+        if let Err(err) = axum::serve(listener, app.into_make_service()).await {
+            eprintln!("replay sql stub terminated: {err}");
         }
     });
 
@@ -179,6 +218,40 @@ pub async fn spawn_app_with_runtime_options_and_person_pipeline(
             {
                 eprintln!("hogflare server terminated: {err}");
             }
+        }
+    });
+
+    Ok((address, server_handle))
+}
+
+pub async fn spawn_app_with_replay(
+    pipeline_endpoint: Url,
+    replay_config: hogflare::replay::ReplayConfig,
+) -> Result<(SocketAddr, JoinHandle<()>), Box<dyn std::error::Error>> {
+    let pipeline_client = PipelineClient::new(pipeline_endpoint, None, Duration::from_secs(5))?;
+    let replay_client = hogflare::replay::ReplayClient::new(replay_config)?;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+
+    let server_handle = tokio::spawn(async move {
+        if let Err(err) = hogflare::serve_with_person_pipeline_and_replay(
+            listener,
+            Arc::new(pipeline_client),
+            None,
+            Some(Arc::new(replay_client)),
+            None,
+            Arc::new(hogflare::groups::MemoryGroupStore::new()),
+            hogflare::groups::GroupTypeMap::default(),
+            None,
+            None,
+            None,
+            None,
+            Arc::new(hogflare::feature_flags::FeatureFlagStore::empty()),
+        )
+        .await
+        {
+            eprintln!("hogflare server terminated: {err}");
         }
     });
 

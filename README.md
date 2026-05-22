@@ -173,6 +173,11 @@ new_sqlite_classes = ["PersonIdCounterDurableObject", "GroupDurableObject"]
 | `POSTHOG_TEAM_ID` | No | Optional team id attached to event and person rows. |
 | `POSTHOG_GROUP_TYPE_0..4` | No | Maps PostHog group types to `group0..group4`; set `POSTHOG_GROUP_TYPE_0=company` to populate `group0` for company groups. |
 | `POSTHOG_SESSION_RECORDING_ENDPOINT` | No | Returned in `/decide` session recording config. |
+| `HOGFLARE_REPLAY_ACCOUNT_ID` | No | Enables the `/replay` UI API when set with bucket and token. |
+| `HOGFLARE_REPLAY_BUCKET` | No | R2 bucket name backing the R2 Data Catalog warehouse. |
+| `HOGFLARE_REPLAY_R2_SQL_TOKEN` | No | R2 SQL/Data Catalog token used server-side to query replay rows. Store as a secret. |
+| `HOGFLARE_REPLAY_EVENTS_TABLE` | No | Iceberg events table queried by replay APIs. Defaults to `default.hogflare_events`. |
+| `HOGFLARE_REPLAY_QUERY_LIMIT` | No | Maximum snapshot rows a replay API request can read. Defaults to `5000`. |
 | `POSTHOG_SIGNING_SECRET` | No | Enables HMAC request signature checks. |
 | `PERSON_DEBUG_TOKEN` | No | Enables `/__debug/person/:id` for deployment verification. |
 | `HOGFLARE_FEATURE_FLAGS` | No | JSON flag config used by `/decide` and `/flags`. |
@@ -190,6 +195,7 @@ bunx wrangler secret put CLOUDFLARE_PERSONS_PIPELINE_AUTH_TOKEN
 bunx wrangler secret put POSTHOG_SIGNING_SECRET
 bunx wrangler secret put PERSON_DEBUG_TOKEN
 bunx wrangler secret put HOGFLARE_FEATURE_FLAGS
+bunx wrangler secret put HOGFLARE_REPLAY_R2_SQL_TOKEN
 ```
 
 ### Deploy
@@ -557,6 +563,20 @@ The Durable Object is the source of truth for the current person record. When `C
 - `/s` accepts PostHog replay payloads, including gzip/gzip-js compressed browser SDK requests.
 - Modern `$snapshot` payloads are normalized to `$snapshot_items` rows before they are sent through Cloudflare Pipelines into R2.
 - Legacy raw chunk payloads are still accepted as `$snapshot` rows.
+- `/replay` serves the read-only replay explorer for browsing sessions, searching analytics events, funnel drop-offs, computed friction signals, and person journeys.
+- `/replay/api/sessions` lists replay sessions by reading `$snapshot_items` and legacy `$snapshot` rows from Iceberg through R2 SQL.
+- `/replay/api/events` searches analytics events, excluding replay recording rows, so product engineers can jump from an event to the matching replay session.
+- `/replay/api/funnels` classifies sessions as converted, stuck, or dropped for an ordered `steps` list of event names.
+- `/replay/api/friction` computes replay-derived signals such as rage clicks, dead clicks, form thrash, long idle gaps, repeated navigation, and deep scroll without follow-up.
+- `/replay/api/person` joins a distinct ID's replay sessions and analytics events into one journey timeline.
+- `/replay/api/sessions/:session_id` returns normalized rrweb events plus an activity timeline for one session.
+
+Replay APIs require `HOGFLARE_REPLAY_ACCOUNT_ID`, `HOGFLARE_REPLAY_BUCKET`, and
+`HOGFLARE_REPLAY_R2_SQL_TOKEN`. The token stays server-side in the Worker; the browser only calls
+Hogflare's replay API. `api_key`, `distinct_id`, `session_id`, `url`, `event_name`, `steps`,
+`signal`, `date_from`, `date_to`, `min_duration_secs`, `max_duration_secs`, `min_events`,
+`max_events`, and `limit` query parameters can be used to narrow replay reads. Session deep links
+use `session_id` plus `at_ms`.
 
 ### Feature flags
 
