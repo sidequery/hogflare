@@ -66,11 +66,11 @@
       }
 
       .app.rail-collapsed {
-        --rail-track: 44px;
+        --rail-track: 0px;
       }
 
       .app.inspector-collapsed {
-        --inspector-track: 44px;
+        --inspector-track: 0px;
       }
 
       .rail,
@@ -81,8 +81,9 @@
       }
 
       .rail {
+        position: relative;
         display: grid;
-        grid-template-rows: minmax(0, 1fr) auto;
+        grid-template-rows: minmax(0, 1fr);
         border-right: 1px solid var(--line);
       }
 
@@ -99,12 +100,13 @@
       }
 
       .app.inspector-collapsed .stage {
-        border-right: 1px solid var(--line);
+        border-right: 0;
       }
 
       .inspector {
+        position: relative;
         display: grid;
-        grid-template-rows: minmax(0, 1fr) auto;
+        grid-template-rows: minmax(0, 1fr);
       }
 
       .inspector-content {
@@ -118,6 +120,14 @@
         display: none;
       }
 
+      .app.rail-collapsed .rail,
+      .app.inspector-collapsed .inspector {
+        border: 0;
+        background: transparent;
+        pointer-events: none;
+        z-index: 20;
+      }
+
       .topbar,
       .stage-head,
       .inspector-head {
@@ -129,12 +139,14 @@
       .inspector-head {
         display: flex;
         align-items: center;
+        padding-right: 56px;
       }
 
       .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
+        padding-right: 56px;
       }
 
       h1,
@@ -423,20 +435,16 @@
       }
 
       .panel-dock {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 10;
         display: flex;
         align-items: center;
-        min-height: 52px;
-        border-top: 1px solid transparent;
-        background: var(--surface);
-        padding: 10px;
-      }
-
-      .rail-dock {
-        justify-content: flex-end;
-      }
-
-      .inspector-dock {
-        justify-content: flex-start;
+        min-height: 0;
+        border-top: 0;
+        background: transparent;
+        padding: 0;
       }
 
       .panel-toggle {
@@ -479,11 +487,21 @@
 
       .app.rail-collapsed .panel-dock,
       .app.inspector-collapsed .panel-dock {
+        position: fixed;
+        top: auto;
+        right: auto;
+        bottom: 12px;
         align-items: flex-end;
         justify-content: center;
-        min-height: 0;
-        border-top: 0;
-        padding: 10px 6px;
+        pointer-events: auto;
+      }
+
+      .app.rail-collapsed .rail-dock {
+        left: 12px;
+      }
+
+      .app.inspector-collapsed .inspector-dock {
+        right: 12px;
       }
 
       @media (hover: hover) {
@@ -782,7 +800,7 @@
         }
 
         .app.rail-collapsed {
-          --rail-track: 44px;
+          --rail-track: 0px;
         }
 
         .app.inspector-collapsed {
@@ -796,7 +814,8 @@
         }
 
         .app.inspector-collapsed .inspector {
-          min-height: 44px;
+          min-height: 0;
+          border-top: 0;
         }
       }
 
