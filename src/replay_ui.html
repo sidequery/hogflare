@@ -446,7 +446,8 @@
       }
 
       .inspector-dock {
-        justify-content: flex-start;
+        justify-content: space-between;
+        gap: 12px;
       }
 
       .panel-toggle {
@@ -508,6 +509,10 @@
 
       .app.inspector-collapsed .inspector-dock {
         right: 12px;
+      }
+
+      .app.inspector-collapsed #debugToggle {
+        display: none;
       }
 
       @media (hover: hover) {
@@ -760,21 +765,18 @@
       }
 
       .debug {
+        display: none;
         border-top: 1px solid var(--line);
       }
 
-      .debug-head {
-        display: flex;
-        justify-content: flex-end;
-        padding: 8px 12px;
+      .debug.is-open {
+        display: block;
       }
 
       .debug pre {
-        display: none;
         max-height: 220px;
         overflow: auto;
         margin: 0;
-        border-top: 1px solid var(--line);
         padding: 12px;
         color: var(--muted);
         font-family: var(--mono);
@@ -782,10 +784,6 @@
         line-height: 1.5;
         white-space: pre-wrap;
         word-break: break-word;
-      }
-
-      .debug.is-open pre {
-        display: block;
       }
 
       .is-hidden {
@@ -1103,9 +1101,6 @@
             <div class="timeline-list" id="activity"></div>
           </section>
           <section class="debug" id="debug">
-            <div class="debug-head">
-              <button class="button subtle" id="debugToggle" type="button">Debug payload</button>
-            </div>
             <pre id="debugPayload">-</pre>
           </section>
         </div>
@@ -1149,6 +1144,7 @@
               <path d="m12 9-3 3 3 3" />
             </svg>
           </button>
+          <button class="button subtle" id="debugToggle" type="button">Debug payload</button>
         </div>
       </aside>
     </main>
