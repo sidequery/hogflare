@@ -83,7 +83,7 @@
       .rail {
         position: relative;
         display: grid;
-        grid-template-rows: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto;
         border-right: 1px solid var(--line);
       }
 
@@ -106,7 +106,7 @@
       .inspector {
         position: relative;
         display: grid;
-        grid-template-rows: minmax(0, 1fr);
+        grid-template-rows: minmax(0, 1fr) auto;
       }
 
       .inspector-content {
@@ -139,14 +139,12 @@
       .inspector-head {
         display: flex;
         align-items: center;
-        padding-right: 56px;
       }
 
       .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding-right: 56px;
       }
 
       h1,
@@ -435,16 +433,20 @@
       }
 
       .panel-dock {
-        position: absolute;
-        top: 12px;
-        right: 12px;
-        z-index: 10;
         display: flex;
         align-items: center;
-        min-height: 0;
-        border-top: 0;
-        background: transparent;
-        padding: 0;
+        min-height: 56px;
+        border-top: 1px solid var(--line);
+        background: var(--surface);
+        padding: 12px;
+      }
+
+      .rail-dock {
+        justify-content: flex-end;
+      }
+
+      .inspector-dock {
+        justify-content: flex-start;
       }
 
       .panel-toggle {
@@ -493,6 +495,10 @@
         bottom: 12px;
         align-items: flex-end;
         justify-content: center;
+        min-height: 0;
+        border-top: 0;
+        background: transparent;
+        padding: 0;
         pointer-events: auto;
       }
 
