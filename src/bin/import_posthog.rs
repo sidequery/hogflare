@@ -25,8 +25,13 @@ async fn run() -> Result<(), ImportError> {
 
     let mode = if dry_run { "dry run" } else { "import" };
     println!(
-        "PostHog {mode} complete: persons={}, groups={}, events={}, skipped={}, pipeline_batches={}",
-        summary.persons, summary.groups, summary.events, summary.skipped, summary.pipeline_batches
+        "PostHog {mode} complete: persons={}, person_snapshots={}, groups={}, events={}, skipped={}, pipeline_batches={}",
+        summary.persons,
+        summary.person_snapshots,
+        summary.groups,
+        summary.events,
+        summary.skipped,
+        summary.pipeline_batches
     );
 
     Ok(())

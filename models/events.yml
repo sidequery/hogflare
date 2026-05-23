@@ -1,0 +1,549 @@
+models:
+  - name: events
+    sql: |
+      with latest_profiles as (
+        select *
+        from (
+          select
+            *,
+            row_number() over (partition by person_id order by updated_at desc, version desc, created_at desc) as profile_rank
+          from {{ persons_table }}
+          where person_id is not null
+        )
+        where profile_rank = 1
+      ),
+      identity_map as (
+        select
+          resolved_person_id,
+          canonical_distinct_id,
+          linked_distinct_id
+        from (
+          select
+            person_id as resolved_person_id,
+            canonical_distinct_id,
+            distinct_id as linked_distinct_id,
+            row_number() over (partition by distinct_id order by updated_at desc, version desc, created_at desc) as identity_rank
+          from latest_profiles,
+          unnest(distinct_ids) as identity_distinct_ids(distinct_id)
+          where distinct_id is not null
+        )
+        where identity_rank = 1
+      ),
+      source as (
+        select
+          uuid,
+          team_id,
+          source,
+          event as event_type,
+          distinct_id,
+          distinct_id as actor_id,
+          coalesce(person_id, identity_map.resolved_person_id, distinct_id) as identity_id,
+          coalesce(person_id, identity_map.resolved_person_id) as resolved_person_id,
+          identity_map.canonical_distinct_id,
+          created_at,
+          timestamp,
+          coalesce(timestamp, created_at) as event_time,
+          properties,
+          context,
+          person_id,
+          person_created_at,
+          person_properties,
+          group0,
+          group1,
+          group2,
+          group3,
+          group4,
+          group_properties,
+          api_key,
+          extra,
+          coalesce(
+            json_extract_string(properties, '$.$session_id'),
+            json_extract_string(properties, '$.session_id'),
+            json_extract_string(context, '$.session_id')
+          ) as session_id,
+          coalesce(
+            json_extract_string(properties, '$.$window_id'),
+            json_extract_string(properties, '$.window_id')
+          ) as window_id,
+          coalesce(
+            json_extract_string(properties, '$.$current_url'),
+            json_extract_string(properties, '$.current_url'),
+            json_extract_string(properties, '$.url')
+          ) as current_url,
+          coalesce(
+            json_extract_string(properties, '$.$pathname'),
+            json_extract_string(properties, '$.pathname'),
+            json_extract_string(properties, '$.path')
+          ) as pathname,
+          coalesce(
+            json_extract_string(properties, '$.$host'),
+            json_extract_string(properties, '$.host')
+          ) as host,
+          coalesce(
+            json_extract_string(properties, '$.$title'),
+            json_extract_string(properties, '$.title')
+          ) as page_title,
+          coalesce(
+            json_extract_string(properties, '$.$referrer'),
+            json_extract_string(properties, '$.referrer')
+          ) as referrer,
+          coalesce(
+            json_extract_string(properties, '$.$utm_source'),
+            json_extract_string(properties, '$.utm_source'),
+            json_extract_string(properties, '$.$initial_utm_source')
+          ) as utm_source,
+          coalesce(
+            json_extract_string(properties, '$.$utm_medium'),
+            json_extract_string(properties, '$.utm_medium'),
+            json_extract_string(properties, '$.$initial_utm_medium')
+          ) as utm_medium,
+          coalesce(
+            json_extract_string(properties, '$.$utm_campaign'),
+            json_extract_string(properties, '$.utm_campaign'),
+            json_extract_string(properties, '$.$initial_utm_campaign')
+          ) as utm_campaign,
+          coalesce(
+            json_extract_string(properties, '$.$utm_content'),
+            json_extract_string(properties, '$.utm_content'),
+            json_extract_string(properties, '$.$initial_utm_content')
+          ) as utm_content,
+          coalesce(
+            json_extract_string(properties, '$.$utm_term'),
+            json_extract_string(properties, '$.utm_term'),
+            json_extract_string(properties, '$.$initial_utm_term')
+          ) as utm_term,
+          coalesce(
+            json_extract_string(properties, '$.$browser'),
+            json_extract_string(properties, '$.browser')
+          ) as browser,
+          coalesce(
+            json_extract_string(properties, '$.$browser_version'),
+            json_extract_string(properties, '$.browser_version')
+          ) as browser_version,
+          coalesce(
+            json_extract_string(properties, '$.$os'),
+            json_extract_string(properties, '$.os')
+          ) as os,
+          coalesce(
+            json_extract_string(properties, '$.$os_version'),
+            json_extract_string(properties, '$.os_version')
+          ) as os_version,
+          coalesce(
+            json_extract_string(properties, '$.$device_type'),
+            json_extract_string(properties, '$.device_type')
+          ) as device_type,
+          coalesce(
+            json_extract_string(properties, '$.$lib'),
+            json_extract_string(properties, '$.library'),
+            json_extract_string(extra, '$.library')
+          ) as library,
+          coalesce(
+            json_extract_string(properties, '$.$lib_version'),
+            json_extract_string(properties, '$.library_version')
+          ) as library_version,
+          coalesce(
+            json_extract_string(properties, '$.$geoip_country_code'),
+            json_extract_string(properties, '$.country')
+          ) as geo_country_code,
+          coalesce(
+            json_extract_string(properties, '$.$geoip_subdivision_1_code'),
+            json_extract_string(properties, '$.region')
+          ) as geo_region,
+          coalesce(
+            json_extract_string(properties, '$.$geoip_city_name'),
+            json_extract_string(properties, '$.city')
+          ) as geo_city,
+          json_extract_string(properties, '$.$geoip_time_zone') as geo_timezone,
+          json_extract_string(properties, '$.cf_colo') as cf_colo,
+          try_cast(json_extract_string(properties, '$.cf_asn') as bigint) as cf_asn,
+          coalesce(
+            json_extract_string(extra, '$.group_type'),
+            json_extract_string(properties, '$.group_type')
+          ) as group_type,
+          coalesce(
+            json_extract_string(extra, '$.group_key'),
+            json_extract_string(properties, '$.group_key')
+          ) as group_key,
+          json_extract_string(extra, '$.alias') as alias,
+          try_cast(json_extract_string(extra, '$.$sent_at') as timestamp) as sent_at,
+          coalesce(
+            json_extract_string(properties, '$.plan'),
+            json_extract_string(person_properties, '$.plan')
+          ) as plan,
+          coalesce(
+            json_extract_string(properties, '$.email'),
+            json_extract_string(person_properties, '$.email')
+          ) as email,
+          nullif(regexp_extract(
+            coalesce(
+              json_extract_string(properties, '$.email'),
+              json_extract_string(person_properties, '$.email')
+            ),
+            '@([^@]+)$',
+            1
+          ), '') as email_domain
+        from {{ events_table }}
+        left join identity_map on distinct_id = identity_map.linked_distinct_id
+      )
+      select
+        *,
+        coalesce(session_id, actor_id || ':' || strftime(event_time, '%Y-%m-%d')) as session_key,
+        event_type not in ('$identify', '$groupidentify', '$create_alias', '$engage', '$snapshot') as is_capture_event,
+        event_type in ('$pageview', 'page_view', '$screen', 'screen') as is_pageview_event,
+        event_type in ('$identify', '$engage') as is_person_mutation_event,
+        event_type = '$groupidentify' as is_group_event,
+        event_type = '$snapshot' as is_session_recording_event,
+        resolved_person_id is not null as has_person,
+        group0 is not null or group1 is not null or group2 is not null or group3 is not null or group4 is not null as has_group,
+        session_id is not null as has_session_id
+      from source
+    description: Canonical Hogflare event fact model over the Cloudflare Pipeline Iceberg table.
+    primary_key: uuid
+    default_time_dimension: event_time
+    default_grain: day
+    metadata:
+      source_table_parameter: events_table
+      persons_table_parameter: persons_table
+
+    relationships:
+      - name: persons
+        type: many_to_one
+        foreign_key: actor_id
+        primary_key: actor_id
+      - name: sessions
+        type: many_to_one
+        foreign_key: session_id
+        primary_key: session_id
+      - name: activity_days
+        type: many_to_one
+        foreign_key: session_key
+        primary_key: activity_day_key
+      - name: person_profiles
+        type: many_to_one
+        foreign_key: resolved_person_id
+        primary_key: person_id
+      - name: identity_links
+        type: many_to_one
+        foreign_key: actor_id
+        primary_key: distinct_id
+
+    dimensions:
+      - name: uuid
+        type: categorical
+        description: Unique pipeline event id.
+      - name: event_type
+        type: categorical
+        description: PostHog event name.
+      - name: source
+        type: categorical
+        description: Event source assigned by Hogflare.
+      - name: team_id
+        type: numeric
+        description: Optional PostHog team id assigned by the Worker.
+      - name: api_key
+        type: categorical
+        description: PostHog project API key.
+      - name: distinct_id
+        type: categorical
+        description: Original PostHog distinct id.
+      - name: actor_id
+        type: categorical
+        description: PostHog distinct id used as the stable journey entity for funnels, sessions, retention, and cohorts.
+      - name: identity_id
+        type: categorical
+        description: Resolved person id when available, otherwise distinct id.
+      - name: resolved_person_id
+        type: categorical
+        description: Resolved Hogflare person id from the event row or the person distinct-id bridge.
+      - name: canonical_distinct_id
+        type: categorical
+        description: Canonical PostHog distinct id from the person distinct-id bridge when available.
+      - name: person_id
+        type: categorical
+        description: Stable Hogflare person id.
+      - name: session_id
+        type: categorical
+        description: SDK session id from event properties.
+      - name: session_key
+        type: categorical
+        description: Session id when present, otherwise actor/day fallback for session-style analysis.
+      - name: window_id
+        type: categorical
+        description: SDK window id from event properties.
+      - name: current_url
+        type: categorical
+        description: Browser current URL.
+      - name: pathname
+        type: categorical
+        description: Browser path.
+      - name: host
+        type: categorical
+        description: Browser host.
+      - name: page_title
+        type: categorical
+        description: Browser page title.
+      - name: referrer
+        type: categorical
+        description: Browser referrer.
+      - name: utm_source
+        type: categorical
+        description: UTM source.
+      - name: utm_medium
+        type: categorical
+        description: UTM medium.
+      - name: utm_campaign
+        type: categorical
+        description: UTM campaign.
+      - name: utm_content
+        type: categorical
+        description: UTM content.
+      - name: utm_term
+        type: categorical
+        description: UTM term.
+      - name: browser
+        type: categorical
+        description: Browser name.
+      - name: browser_version
+        type: categorical
+        description: Browser version.
+      - name: os
+        type: categorical
+        description: Operating system.
+      - name: os_version
+        type: categorical
+        description: Operating system version.
+      - name: device_type
+        type: categorical
+        description: Device type.
+      - name: library
+        type: categorical
+        description: SDK/library name.
+      - name: library_version
+        type: categorical
+        description: SDK/library version.
+      - name: geo_country_code
+        type: categorical
+        description: Country code from Cloudflare enrichment or event properties.
+      - name: geo_region
+        type: categorical
+        description: Region/subdivision from Cloudflare enrichment or event properties.
+      - name: geo_city
+        type: categorical
+        description: City from Cloudflare enrichment or event properties.
+      - name: geo_timezone
+        type: categorical
+        description: Timezone from Cloudflare enrichment.
+      - name: cf_colo
+        type: categorical
+        description: Cloudflare colo.
+      - name: cf_asn
+        type: numeric
+        description: Cloudflare autonomous system number.
+      - name: group0
+        type: categorical
+        description: First configured group key.
+      - name: group1
+        type: categorical
+        description: Second configured group key.
+      - name: group2
+        type: categorical
+        description: Third configured group key.
+      - name: group3
+        type: categorical
+        description: Fourth configured group key.
+      - name: group4
+        type: categorical
+        description: Fifth configured group key.
+      - name: group_type
+        type: categorical
+        description: Group type carried by group identify events.
+      - name: group_key
+        type: categorical
+        description: Group key carried by group identify events.
+      - name: alias
+        type: categorical
+        description: Alias id carried by create-alias events.
+      - name: plan
+        type: categorical
+        description: Common person or event plan property.
+      - name: email_domain
+        type: categorical
+        description: Domain extracted from a common email property.
+      - name: is_capture_event
+        type: boolean
+        description: True for non-system capture events.
+      - name: is_pageview_event
+        type: boolean
+        description: True for pageview or screen events.
+      - name: is_person_mutation_event
+        type: boolean
+        description: True for identify or engage events.
+      - name: is_group_event
+        type: boolean
+        description: True for group identify events.
+      - name: is_session_recording_event
+        type: boolean
+        description: True for session recording snapshot events.
+      - name: has_person
+        type: boolean
+        description: True when Hogflare resolved a person id.
+      - name: has_group
+        type: boolean
+        description: True when any configured group slot is populated.
+      - name: has_session_id
+        type: boolean
+        description: True when an SDK session id exists.
+      - name: created_at
+        type: time
+        granularity: day
+        description: Timestamp when Hogflare created the pipeline event.
+      - name: timestamp
+        type: time
+        granularity: day
+        description: Client-supplied event timestamp when present.
+      - name: person_created_at
+        type: time
+        granularity: day
+        description: First-seen timestamp for the resolved person record.
+      - name: sent_at
+        type: time
+        granularity: day
+        description: SDK batch sent-at timestamp when present.
+      - name: event_time
+        type: time
+        granularity: day
+        description: Client timestamp when present, otherwise ingestion timestamp.
+
+    metrics:
+      - name: event_count
+        agg: count
+        description: Total number of events.
+      - name: capture_events
+        agg: count
+        filters:
+          - is_capture_event
+        description: Count of non-system capture events.
+      - name: custom_events
+        agg: count
+        filters:
+          - is_capture_event and not is_pageview_event
+        description: Count of non-system, non-pageview events.
+      - name: unique_users
+        agg: count_distinct
+        sql: actor_id
+        description: Distinct actor ids.
+      - name: known_persons
+        agg: count_distinct
+        sql: resolved_person_id
+        description: Distinct resolved Hogflare person ids from event rows or identity links.
+      - name: anonymous_users
+        agg: count_distinct
+        sql: actor_id
+        filters:
+          - resolved_person_id is null
+        description: Distinct actors without a resolved person id.
+      - name: unique_sessions
+        agg: count_distinct
+        sql: session_key
+        description: Distinct SDK sessions, falling back to actor/day.
+      - name: pageviews
+        agg: count
+        filters:
+          - is_pageview_event
+        description: Pageview and screen events.
+      - name: autocaptures
+        agg: count
+        filters:
+          - "event_type = '$autocapture'"
+        description: Autocapture events.
+      - name: identify_events
+        agg: count
+        filters:
+          - "event_type = '$identify'"
+        description: Identify events.
+      - name: group_identify_events
+        agg: count
+        filters:
+          - "event_type = '$groupidentify'"
+        description: Group identify events.
+      - name: alias_events
+        agg: count
+        filters:
+          - "event_type = '$create_alias'"
+        description: Alias creation events.
+      - name: engage_events
+        agg: count
+        filters:
+          - "event_type = '$engage'"
+        description: Engage/person mutation events.
+      - name: snapshot_events
+        agg: count
+        filters:
+          - "event_type = '$snapshot'"
+        description: Session recording snapshot events.
+      - name: grouped_events
+        agg: count
+        filters:
+          - has_group
+        description: Events linked to at least one configured group key.
+      - name: events_with_properties
+        agg: count
+        filters:
+          - properties is not null
+        description: Events with a properties JSON payload.
+      - name: events_with_context
+        agg: count
+        filters:
+          - context is not null
+        description: Events with a context JSON payload.
+      - name: unique_groups
+        agg: count_distinct
+        sql: coalesce(group0, group1, group2, group3, group4)
+        description: Distinct group keys across populated group slots.
+      - name: unique_api_keys
+        agg: count_distinct
+        sql: api_key
+        description: Distinct PostHog project API keys.
+      - name: power_users
+        type: cohort
+        entity: actor_id
+        inner_metrics:
+          - name: user_events
+            agg: count
+        having: user_events >= 10
+        agg: count
+        description: Count of actors with at least 10 events in the query scope.
+      - name: multi_session_users
+        type: cohort
+        entity: actor_id
+        inner_metrics:
+          - name: session_count
+            agg: count_distinct
+            sql: session_key
+        having: session_count >= 2
+        agg: count
+        description: Count of actors with at least two sessions in the query scope.
+
+    segments:
+      - name: capture_events
+        sql: is_capture_event
+        description: Non-system capture events.
+      - name: pageviews
+        sql: is_pageview_event
+        description: Pageview and screen events.
+      - name: custom_events
+        sql: is_capture_event and not is_pageview_event
+        description: Non-system, non-pageview events.
+      - name: identified
+        sql: resolved_person_id is not null
+        description: Events linked to a resolved person.
+      - name: anonymous
+        sql: resolved_person_id is null
+        description: Events not linked to a resolved person.
+      - name: grouped
+        sql: has_group
+        description: Events linked to a group.
+      - name: session_recordings
+        sql: is_session_recording_event
+        description: Session recording snapshot events.
+
