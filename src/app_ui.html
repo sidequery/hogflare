@@ -850,7 +850,6 @@
         border-right: 1px solid var(--line);
         background: transparent;
         color: inherit;
-        cursor: pointer;
         font: inherit;
         padding: 9px 12px;
         text-align: left;
@@ -865,7 +864,6 @@
         border-right: 0;
       }
 
-      .metric-card:hover,
       .metric-card.is-selected {
         background: var(--surface-soft);
       }
@@ -1906,6 +1904,9 @@
       const analyticsBreakdownLimit = 10;
 
       const analyticsPanelOrder = [
+        "summary",
+        "series",
+        "focus_breakdown",
         "top_events",
         "top_pages",
         "domains",
@@ -1915,9 +1916,6 @@
         "countries",
         "regions",
         "cities",
-        "summary",
-        "series",
-        "focus_breakdown",
       ];
       const analyticsBuiltInBreakdownPanels = {
         "events.event_type": "top_events",
@@ -2149,7 +2147,13 @@
         for (const select of [els.metric, els.dimension, els.granularity]) {
           select.addEventListener("change", () => {
             if (select === els.metric) syncAnalyticsDimensions();
-            if (state.mode === "overview") requestAnalyticsSearch();
+            if (state.mode === "overview") {
+              if (select === els.granularity) {
+                requestAnalyticsSearch({ panels: ["series"] });
+              } else {
+                requestAnalyticsSearch({ panels: analyticsFocusPanels() });
+              }
+            }
           });
         }
         syncAnalyticsDimensions();
@@ -2568,13 +2572,13 @@
         }
       }
 
-      function requestAnalyticsSearch() {
+      function requestAnalyticsSearch(options = {}) {
         if (state.mode !== "overview") {
           runSearch();
           return;
         }
         replaceAnalyticsUrlFromForm();
-        runSearch();
+        runSearch(options);
       }
 
       async function requestJson(path, params, options = {}) {
@@ -2591,17 +2595,18 @@
         setAnalyticsLoading(false);
       }
 
-      async function loadCharts() {
+      async function loadCharts(options = {}) {
         const requestId = ++state.analyticsRequestId;
         const params = paramsFromForm({ mode: "overview" });
-        const panels = analyticsPanelsForCurrentQuery();
+        const availablePanels = analyticsPanelsForCurrentQuery();
+        const panels = analyticsPanelsForRequest(options.panels, availablePanels);
         state.analyticsPendingPanels = new Set(panels);
         clearStatus();
         setAnalyticsLoading(true);
         try {
           state.mode = "overview";
           syncSectionControls();
-          state.charts = analyticsShellFromForm();
+          prepareAnalyticsShell(panels);
           state.selectedSession = null;
           state.sessionPayload = null;
           renderResults();
@@ -2808,13 +2813,42 @@
         };
       }
 
+      function analyticsPanelsForRequest(requestedPanels, availablePanels = analyticsPanelsForCurrentQuery()) {
+        if (!requestedPanels?.length || !state.charts) return availablePanels;
+        return [...new Set(requestedPanels)].filter((panel) => availablePanels.includes(panel));
+      }
+
+      function analyticsFocusPanels() {
+        const panels = ["series", "focus_breakdown"];
+        const visiblePanels = analyticsPanelsForCurrentQuery();
+        for (const panel of visiblePanels) {
+          if (["summary", "series", "focus_breakdown"].includes(panel)) continue;
+          if (!state.charts?.breakdowns?.some((breakdown) => breakdown.panel_key === panel)) panels.push(panel);
+        }
+        return panels;
+      }
+
+      function prepareAnalyticsShell(panels) {
+        const shell = analyticsShellFromForm();
+        if (!state.charts || panels.includes("summary")) {
+          state.charts = shell;
+          return;
+        }
+        state.charts.focus = shell.focus;
+        if (panels.includes("series")) state.charts.series = [];
+        if (panels.includes("focus_breakdown")) {
+          state.charts.breakdowns = (state.charts.breakdowns || []).filter(
+            (breakdown) => breakdown.panel_key !== "focus_breakdown",
+          );
+        }
+      }
+
       function analyticsPanelsForCurrentQuery() {
         const focus = analyticsFocusFromCurrentForm();
+        const focusBuiltinPanel = analyticsBuiltInBreakdownPanels[focus.dimension];
         return analyticsPanelOrder.filter((panel) => {
-          if (panel !== "focus_breakdown") return true;
-          if (analyticsBuiltInBreakdownPanels[focus.dimension]) return false;
-          const dimensionName = focus.dimension.split(".").at(-1);
-          return !["geo_country_code", "geo_region", "geo_city"].includes(dimensionName);
+          if (panel === focusBuiltinPanel) return false;
+          return true;
         });
       }
 
@@ -2902,12 +2936,11 @@
           return grid;
         }
         for (const metric of metrics) {
-          const card = document.createElement("button");
-          card.type = "button";
+          const card = document.createElement("div");
           card.className = "metric-card";
           card.dataset.metric = metric.semantic_ref;
           card.classList.toggle("is-selected", metric.semantic_ref === selectedMetricRef);
-          card.addEventListener("click", () => selectAnalyticsMetric(metric.semantic_ref));
+          if (metric.semantic_ref === selectedMetricRef) card.setAttribute("aria-current", "true");
           const label = document.createElement("span");
           label.textContent = metric.label;
           const value = document.createElement("strong");
@@ -2936,7 +2969,7 @@
         if (!analyticsMetricModels[metricRef]) return;
         els.metric.value = metricRef;
         syncAnalyticsDimensions();
-        if (state.mode === "overview") requestAnalyticsSearch();
+        if (state.mode === "overview") requestAnalyticsSearch({ panels: analyticsFocusPanels() });
       }
 
       function renderSeriesPanel(charts) {
@@ -2970,10 +3003,11 @@
         grid.className = "breakdown-grid";
         grid.setAttribute("aria-label", "Metric breakdowns");
         const rendered = new Set();
+        const visiblePanels = new Set(analyticsPanelsForCurrentQuery());
         const breakdownsByPanel = new Map(
           breakdowns.map((breakdown) => [breakdown.panel_key || breakdownPanelKey(breakdown), breakdown]),
         );
-        for (const panel of analyticsPanelsForCurrentQuery().filter((item) => !["summary", "series"].includes(item))) {
+        for (const panel of [...visiblePanels].filter((item) => !["summary", "series"].includes(item))) {
           const breakdown = breakdownsByPanel.get(panel);
           if (breakdown) {
             rendered.add(breakdown);
@@ -2983,7 +3017,8 @@
           }
         }
         for (const breakdown of breakdowns) {
-          if (!rendered.has(breakdown)) grid.appendChild(renderBreakdownPanel(breakdown));
+          const panel = breakdown.panel_key || breakdownPanelKey(breakdown);
+          if (!rendered.has(breakdown) && visiblePanels.has(panel)) grid.appendChild(renderBreakdownPanel(breakdown));
         }
         return grid;
       }
@@ -3054,16 +3089,16 @@
       function loadingBreakdownTitle(panel) {
         const focus = state.charts?.focus || analyticsFocusFromCurrentForm();
         const titles = {
-          focus_breakdown: analyticsDimensionTitle(focus.dimension),
-          top_events: "Top events",
-          top_pages: "Top pages",
-          domains: "Domains",
-          referring_domains: "Referring domains",
-          referrers: "Referrers",
-          browsers: "Browsers",
-          countries: "Countries",
-          regions: "Regions",
-          cities: "Cities",
+          focus_breakdown: `${analyticsMetricLabel(focus.metric)} by ${analyticsDimensionLabel(focus.dimension)}`,
+          top_events: "Events by Event",
+          top_pages: "Pageviews by Page",
+          domains: "Pageviews by Domain",
+          referring_domains: "Pageviews by Referring domain",
+          referrers: "Pageviews by Referrer",
+          browsers: "Events by Browser",
+          countries: "Events by Country",
+          regions: "Events by Region",
+          cities: "Events by City",
         };
         return titles[panel] || "Breakdown";
       }
@@ -3210,19 +3245,14 @@
 
       function seriesConfig(charts = null) {
         const focusMetric = charts?.focus?.metric || "";
-        const config = [
+        return [
           {
             key: "focused_value",
             ref: focusMetric,
             label: charts?.focus?.metric_label || "Selected",
             color: "#087a55",
           },
-          { key: "event_count", ref: "events.event_count", label: "Events", color: "#5c6670" },
-          { key: "pageviews", ref: "pageviews.pageviews", label: "Pageviews", color: "#2d5f9a" },
-          { key: "session_count", ref: "sessions.session_count", label: "Sessions", color: "#9a6b16" },
-          { key: "recordings", ref: "events.snapshot_events", label: "Recordings", color: "#9d332b" },
         ];
-        return config.filter((item, index) => index === 0 || item.ref !== focusMetric);
       }
 
       function grainLabel(granularity) {
@@ -3740,9 +3770,9 @@
         );
       }
 
-      async function runSearch() {
+      async function runSearch(options = {}) {
         try {
-          if (state.mode === "overview") await loadCharts();
+          if (state.mode === "overview") await loadCharts(options);
           else if (state.mode === "sessions") await loadSessions();
           else if (state.mode === "events") await loadEvents();
           else if (state.mode === "funnels") await loadFunnels();

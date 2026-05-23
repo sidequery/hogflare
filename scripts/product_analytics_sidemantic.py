@@ -531,17 +531,6 @@ class SidemanticAnalytics:
             filters=sessions_filters,
             skip_default_time_dimensions=True,
         )
-        context_series_rows = self._rows(
-            metrics=[
-                "events.event_count",
-                "events.pageviews",
-                "events.unique_sessions",
-                "events.snapshot_events",
-            ],
-            dimensions=[f"events.event_time__{granularity}"],
-            filters=events_filters,
-            order_by=[f"events.event_time__{granularity}"],
-        )
         focus_time_dimension = TIME_DIMENSIONS[metric["model"]]
         focus_bucket_ref = f"{metric['model']}.{focus_time_dimension}__{granularity}"
         focus_series_rows = self._rows(
@@ -680,23 +669,21 @@ class SidemanticAnalytics:
         replay_chunks = to_int(events_summary.get("snapshot_events"))
         focus_value = to_float(focus_total.get(metric["metric"]))
 
-        breakdowns = []
-        if not use_builtin_breakdown(dimension):
-            breakdowns.append(
-                breakdown(
-                    dimension.get("title", dimension["label"]),
-                    dimension["model"],
-                    dimension["dimension"],
-                    metric["ref"],
-                    focus_breakdown_rows,
-                    dimension["dimension"],
-                    metric["metric"],
-                    focus_breakdown_total,
-                )
+        breakdowns = [
+            breakdown(
+                f"{metric['label']} by {dimension['label']}",
+                dimension["model"],
+                dimension["dimension"],
+                metric["ref"],
+                focus_breakdown_rows,
+                dimension["dimension"],
+                metric["metric"],
+                focus_breakdown_total,
             )
+        ]
         for candidate in [
             breakdown(
-                "Top events",
+                "Events by Event",
                 "events",
                 "event_type",
                 "events.event_count",
@@ -706,7 +693,7 @@ class SidemanticAnalytics:
                 event_count,
             ),
             breakdown(
-                "Top pages",
+                "Pageviews by Page",
                 "pageviews",
                 "pathname",
                 "pageviews.pageviews",
@@ -716,7 +703,7 @@ class SidemanticAnalytics:
                 pageviews,
             ),
             breakdown(
-                "Domains",
+                "Pageviews by Domain",
                 "pageviews",
                 "host",
                 "pageviews.pageviews",
@@ -726,7 +713,7 @@ class SidemanticAnalytics:
                 pageviews,
             ),
             breakdown(
-                "Referring domains",
+                "Pageviews by Referring domain",
                 "pageviews",
                 "referrer_domain",
                 "pageviews.pageviews",
@@ -736,7 +723,7 @@ class SidemanticAnalytics:
                 pageviews,
             ),
             breakdown(
-                "Referrers",
+                "Pageviews by Referrer",
                 "pageviews",
                 "referrer",
                 "pageviews.pageviews",
@@ -746,7 +733,7 @@ class SidemanticAnalytics:
                 pageviews,
             ),
             breakdown(
-                "Browsers",
+                "Events by Browser",
                 "events",
                 "browser",
                 "events.event_count",
@@ -756,7 +743,7 @@ class SidemanticAnalytics:
                 event_count,
             ),
             breakdown(
-                "Countries",
+                "Events by Country",
                 "events",
                 "geo_country_code",
                 "events.event_count",
@@ -766,7 +753,7 @@ class SidemanticAnalytics:
                 event_count,
             ),
             breakdown(
-                "Regions",
+                "Events by Region",
                 "events",
                 "geo_region",
                 "events.event_count",
@@ -776,7 +763,7 @@ class SidemanticAnalytics:
                 event_count,
             ),
             breakdown(
-                "Cities",
+                "Events by City",
                 "events",
                 "geo_city",
                 "events.event_count",
@@ -811,7 +798,6 @@ class SidemanticAnalytics:
                 count_metric("Replay chunks", replay_chunks, "events", "snapshot_events"),
             ],
             "series": series_points(
-                context_series_rows,
                 focus_series_rows,
                 focus_time_dimension,
                 granularity,
@@ -868,17 +854,6 @@ class SidemanticAnalytics:
             return response
 
         if panel == "series":
-            context_series_rows = self._rows(
-                metrics=[
-                    "events.event_count",
-                    "events.pageviews",
-                    "events.unique_sessions",
-                    "events.snapshot_events",
-                ],
-                dimensions=[f"events.event_time__{granularity}"],
-                filters=events_filters,
-                order_by=[f"events.event_time__{granularity}"],
-            )
             focus_time_dimension = TIME_DIMENSIONS[metric["model"]]
             focus_bucket_ref = f"{metric['model']}.{focus_time_dimension}__{granularity}"
             focus_series_rows = self._rows(
@@ -888,7 +863,6 @@ class SidemanticAnalytics:
                 order_by=[focus_bucket_ref],
             )
             response["series"] = series_points(
-                context_series_rows,
                 focus_series_rows,
                 focus_time_dimension,
                 granularity,
@@ -897,8 +871,6 @@ class SidemanticAnalytics:
             return response
 
         if panel == "focus_breakdown":
-            if use_builtin_breakdown(dimension):
-                return response
             focus_breakdown_filters = [
                 *self._filters_for(metric["model"], query, exclude_dimension_ref=dimension["ref"]),
                 f"{dimension['ref']} is not null",
@@ -918,7 +890,7 @@ class SidemanticAnalytics:
             )
             response["breakdowns"] = [
                 breakdown(
-                    dimension.get("title", dimension["label"]),
+                    f"{metric['label']} by {dimension['label']}",
                     dimension["model"],
                     dimension["dimension"],
                     metric["ref"],
@@ -942,21 +914,21 @@ class SidemanticAnalytics:
         top_limit: int,
     ) -> dict[str, Any] | None:
         configs = {
-            "top_events": ("Top events", "events", "event_type", "events.event_count", "event_count"),
-            "top_pages": ("Top pages", "pageviews", "pathname", "pageviews.pageviews", "pageviews"),
-            "domains": ("Domains", "pageviews", "host", "pageviews.pageviews", "pageviews"),
+            "top_events": ("Events by Event", "events", "event_type", "events.event_count", "event_count"),
+            "top_pages": ("Pageviews by Page", "pageviews", "pathname", "pageviews.pageviews", "pageviews"),
+            "domains": ("Pageviews by Domain", "pageviews", "host", "pageviews.pageviews", "pageviews"),
             "referring_domains": (
-                "Referring domains",
+                "Pageviews by Referring domain",
                 "pageviews",
                 "referrer_domain",
                 "pageviews.pageviews",
                 "pageviews",
             ),
-            "referrers": ("Referrers", "pageviews", "referrer", "pageviews.pageviews", "pageviews"),
-            "browsers": ("Browsers", "events", "browser", "events.event_count", "event_count"),
-            "countries": ("Countries", "events", "geo_country_code", "events.event_count", "event_count"),
-            "regions": ("Regions", "events", "geo_region", "events.event_count", "event_count"),
-            "cities": ("Cities", "events", "geo_city", "events.event_count", "event_count"),
+            "referrers": ("Pageviews by Referrer", "pageviews", "referrer", "pageviews.pageviews", "pageviews"),
+            "browsers": ("Events by Browser", "events", "browser", "events.event_count", "event_count"),
+            "countries": ("Events by Country", "events", "geo_country_code", "events.event_count", "event_count"),
+            "regions": ("Events by Region", "events", "geo_region", "events.event_count", "event_count"),
+            "cities": ("Events by City", "events", "geo_city", "events.event_count", "event_count"),
         }
         config = configs.get(panel)
         if not config:
@@ -1243,32 +1215,25 @@ def dimension_ref_for_model(source_ref: str, model: str) -> str | None:
 
 
 def series_points(
-    context_rows: list[dict[str, Any]],
     focus_rows: list[dict[str, Any]],
     focus_time_dimension: str,
     granularity: str,
     focus_value_key: str,
 ) -> list[dict[str, Any]]:
-    context_bucket_key = f"event_time__{granularity}"
     focus_bucket_key = f"{focus_time_dimension}__{granularity}"
-    context_by_bucket = {
-        date_label(row.get(context_bucket_key)): row
-        for row in context_rows
-        if row.get(context_bucket_key) is not None
-    }
     focus_by_bucket = {
         date_label(row.get(focus_bucket_key)): row
         for row in focus_rows
         if row.get(focus_bucket_key) is not None
     }
-    buckets = sorted(set(context_by_bucket) | set(focus_by_bucket))
+    buckets = sorted(focus_by_bucket)
     return [
         {
             "bucket": bucket,
-            "event_count": to_int(context_by_bucket.get(bucket, {}).get("event_count")),
-            "pageviews": to_int(context_by_bucket.get(bucket, {}).get("pageviews")),
-            "session_count": to_int(context_by_bucket.get(bucket, {}).get("unique_sessions")),
-            "recordings": to_int(context_by_bucket.get(bucket, {}).get("snapshot_events")),
+            "event_count": 0,
+            "pageviews": 0,
+            "session_count": 0,
+            "recordings": 0,
             "focused_value": to_float(focus_by_bucket.get(bucket, {}).get(focus_value_key)),
         }
         for bucket in buckets
