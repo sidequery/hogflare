@@ -7,6 +7,7 @@ use thiserror::Error;
 use url::Url;
 
 use crate::feature_flags::FeatureFlagStore;
+use crate::product_analytics::ProductAnalyticsConfig;
 use crate::replay::{ReplayConfig, ReplayConfigError};
 
 #[derive(Debug, Clone)]
@@ -22,6 +23,7 @@ pub struct Config {
     pub posthog_project_api_key: Option<String>,
     pub session_recording_endpoint: Option<String>,
     pub replay: Option<ReplayConfig>,
+    pub analytics: Option<ProductAnalyticsConfig>,
     pub posthog_signing_secret: Option<String>,
     pub person_debug_token: Option<String>,
     pub feature_flags: FeatureFlagStore,
@@ -136,6 +138,7 @@ impl Config {
             .ok()
             .map(|v| v.to_string());
         let replay = replay_config_from_worker_env(env)?;
+        let analytics = analytics_config_from_worker_env(env)?;
         let posthog_signing_secret = env
             .secret("POSTHOG_SIGNING_SECRET")
             .ok()
@@ -174,6 +177,7 @@ impl Config {
             posthog_project_api_key,
             session_recording_endpoint,
             replay,
+            analytics,
             posthog_signing_secret,
             person_debug_token,
             feature_flags,
@@ -269,6 +273,7 @@ impl Config {
         let posthog_project_api_key = env::var("POSTHOG_API_KEY").ok();
         let session_recording_endpoint = env::var("POSTHOG_SESSION_RECORDING_ENDPOINT").ok();
         let replay = replay_config_from_env()?;
+        let analytics = analytics_config_from_env()?;
         let posthog_signing_secret = env::var("POSTHOG_SIGNING_SECRET").ok();
         let person_debug_token = env::var("PERSON_DEBUG_TOKEN").ok();
         let feature_flags = match env::var("HOGFLARE_FEATURE_FLAGS") {
@@ -294,6 +299,7 @@ impl Config {
             posthog_project_api_key,
             session_recording_endpoint,
             replay,
+            analytics,
             posthog_signing_secret,
             person_debug_token,
             feature_flags,
@@ -354,6 +360,50 @@ fn replay_config_from_worker_env(env: &worker::Env) -> Result<Option<ReplayConfi
     .map_err(ConfigError::from)
 }
 
+#[cfg(target_arch = "wasm32")]
+fn analytics_config_from_worker_env(
+    env: &worker::Env,
+) -> Result<Option<ProductAnalyticsConfig>, ConfigError> {
+    let account_id = worker_var_any(
+        env,
+        &[
+            "HOGFLARE_ANALYTICS_ACCOUNT_ID",
+            "HOGFLARE_REPLAY_ACCOUNT_ID",
+        ],
+    );
+    let bucket_name = worker_var_any(
+        env,
+        &["HOGFLARE_ANALYTICS_BUCKET", "HOGFLARE_REPLAY_BUCKET"],
+    );
+    let auth_token = worker_secret_or_var_any(
+        env,
+        &[
+            "HOGFLARE_ANALYTICS_R2_SQL_TOKEN",
+            "HOGFLARE_REPLAY_R2_SQL_TOKEN",
+        ],
+    );
+
+    let configured = account_id.is_some() || bucket_name.is_some() || auth_token.is_some();
+    if !configured {
+        return Ok(None);
+    }
+
+    let events_table = worker_var_any(
+        env,
+        &[
+            "HOGFLARE_ANALYTICS_EVENTS_TABLE",
+            "HOGFLARE_REPLAY_EVENTS_TABLE",
+        ],
+    );
+
+    Ok(Some(ProductAnalyticsConfig::new(
+        account_id.ok_or(ConfigError::MissingVar("HOGFLARE_ANALYTICS_ACCOUNT_ID"))?,
+        bucket_name.ok_or(ConfigError::MissingVar("HOGFLARE_ANALYTICS_BUCKET"))?,
+        auth_token.ok_or(ConfigError::MissingVar("HOGFLARE_ANALYTICS_R2_SQL_TOKEN"))?,
+        events_table,
+    )))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn replay_config_from_env() -> Result<Option<ReplayConfig>, ConfigError> {
     let account_id = env::var("HOGFLARE_REPLAY_ACCOUNT_ID").ok();
@@ -384,6 +434,36 @@ fn replay_config_from_env() -> Result<Option<ReplayConfig>, ConfigError> {
     .map_err(ConfigError::from)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn analytics_config_from_env() -> Result<Option<ProductAnalyticsConfig>, ConfigError> {
+    let account_id = env_any(&[
+        "HOGFLARE_ANALYTICS_ACCOUNT_ID",
+        "HOGFLARE_REPLAY_ACCOUNT_ID",
+    ]);
+    let bucket_name = env_any(&["HOGFLARE_ANALYTICS_BUCKET", "HOGFLARE_REPLAY_BUCKET"]);
+    let auth_token = env_any(&[
+        "HOGFLARE_ANALYTICS_R2_SQL_TOKEN",
+        "HOGFLARE_REPLAY_R2_SQL_TOKEN",
+    ]);
+
+    let configured = account_id.is_some() || bucket_name.is_some() || auth_token.is_some();
+    if !configured {
+        return Ok(None);
+    }
+
+    let events_table = env_any(&[
+        "HOGFLARE_ANALYTICS_EVENTS_TABLE",
+        "HOGFLARE_REPLAY_EVENTS_TABLE",
+    ]);
+
+    Ok(Some(ProductAnalyticsConfig::new(
+        account_id.ok_or(ConfigError::MissingVar("HOGFLARE_ANALYTICS_ACCOUNT_ID"))?,
+        bucket_name.ok_or(ConfigError::MissingVar("HOGFLARE_ANALYTICS_BUCKET"))?,
+        auth_token.ok_or(ConfigError::MissingVar("HOGFLARE_ANALYTICS_R2_SQL_TOKEN"))?,
+        events_table,
+    )))
+}
+
 fn parse_replay_query_limit(value: Option<String>) -> Result<Option<usize>, ConfigError> {
     value
         .map(|value| {
@@ -411,4 +491,26 @@ fn parse_optional_url(
             })
         })
         .transpose()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn env_any(names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| env::var(name).ok())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn worker_var_any(env: &worker::Env, names: &[&str]) -> Option<String> {
+    names
+        .iter()
+        .find_map(|name| env.var(name).ok().map(|value| value.to_string()))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn worker_secret_or_var_any(env: &worker::Env, names: &[&str]) -> Option<String> {
+    names.iter().find_map(|name| {
+        env.secret(name)
+            .ok()
+            .map(|secret| secret.to_string())
+            .or_else(|| env.var(name).ok().map(|value| value.to_string()))
+    })
 }

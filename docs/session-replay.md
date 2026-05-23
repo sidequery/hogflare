@@ -2,7 +2,7 @@
 
 ![Hogflare replay explorer](assets/replay-explorer.jpg)
 
-Hogflare stores replay uploads in the same events table as analytics events, then serves a read-only replay explorer from `/replay`. The UI is for product analytics workflows: browse recent sessions, search events, inspect funnel drop-offs, review computed friction signals, and follow a person journey.
+Hogflare stores replay uploads in the same events table as product events, then serves a read-only replay explorer from `/replay`. The replay feature is for browsing recent sessions, searching events, inspecting funnel drop-offs, reviewing computed friction signals, and following a person journey.
 
 ## Ingestion
 
@@ -27,14 +27,16 @@ Replay APIs require:
 
 The token stays server-side in the Worker. The browser only calls Hogflare's replay API.
 
+Product analytics has a separate first-class route and API. See [product analytics](product-analytics.md).
+
 ## Routes
 
 - `/replay` serves the explorer UI.
 - `/replay/api/sessions` lists replay sessions by reading `$snapshot_items` and legacy `$snapshot` rows from Iceberg through R2 SQL.
-- `/replay/api/events` searches analytics events while excluding replay recording rows.
+- `/replay/api/events` searches product events while excluding replay recording rows.
 - `/replay/api/funnels` classifies sessions as converted, stuck, or dropped for an ordered `steps` list of event names.
 - `/replay/api/friction` computes replay-derived signals such as rage clicks, dead clicks, form thrash, long idle gaps, repeated navigation, and deep scroll without follow-up.
-- `/replay/api/person` joins a distinct ID's replay sessions and analytics events into one journey timeline.
+- `/replay/api/person` joins a distinct ID's replay sessions and product events into one journey timeline.
 - `/replay/api/sessions/:session_id` returns normalized rrweb events plus an activity timeline for one session.
 
 ## Filters
