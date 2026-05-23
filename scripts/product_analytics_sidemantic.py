@@ -27,20 +27,24 @@ IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
 NUMERIC_LITERAL_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
 GRANULARITIES = {"hour", "day", "week", "month"}
 ANALYTICS_BREAKDOWN_LIMIT = 10
-CHART_PANELS = {
-    "summary",
-    "series",
-    "focus_breakdown",
+LEADERBOARD_PANELS = [
     "top_events",
     "top_pages",
     "domains",
     "referring_domains",
     "referrers",
     "browsers",
+    "operating_systems",
+    "devices",
     "countries",
     "regions",
     "cities",
-}
+    "timezones",
+    "asns",
+    "utm_sources",
+    "utm_campaigns",
+]
+CHART_PANELS = {"summary", "series", "focus_breakdown", *LEADERBOARD_PANELS}
 TIME_DIMENSIONS = {
     "events": "event_time",
     "pageviews": "event_time",
@@ -53,7 +57,9 @@ DEFAULT_DIMENSIONS = {
 }
 BUILTIN_BREAKDOWN_DIMENSIONS = {
     "events.event_type",
+    "events.pathname",
     "pageviews.pathname",
+    "pageviews.event_type",
     "pageviews.host",
     "pageviews.referrer_domain",
     "pageviews.referrer",
@@ -61,6 +67,80 @@ BUILTIN_BREAKDOWN_DIMENSIONS = {
     "events.geo_country_code",
     "events.geo_region",
     "events.geo_city",
+}
+PANEL_DIMENSIONS = {
+    "top_events": {
+        "events": "events.event_type",
+        "pageviews": "pageviews.event_type",
+    },
+    "top_pages": {
+        "events": "events.pathname",
+        "pageviews": "pageviews.pathname",
+        "sessions": "sessions.landing_path",
+    },
+    "domains": {
+        "events": "events.host",
+        "pageviews": "pageviews.host",
+    },
+    "referring_domains": {
+        "events": "events.referrer_domain",
+        "pageviews": "pageviews.referrer_domain",
+        "sessions": "sessions.referrer_domain",
+    },
+    "referrers": {
+        "events": "events.referrer",
+        "pageviews": "pageviews.referrer",
+        "sessions": "sessions.referrer",
+    },
+    "browsers": {
+        "events": "events.browser",
+        "pageviews": "pageviews.browser",
+        "sessions": "sessions.browser",
+    },
+    "operating_systems": {
+        "events": "events.os",
+        "pageviews": "pageviews.os",
+        "sessions": "sessions.os",
+    },
+    "devices": {
+        "events": "events.device_type",
+        "pageviews": "pageviews.device_type",
+        "sessions": "sessions.device_type",
+    },
+    "countries": {
+        "events": "events.geo_country_code",
+        "pageviews": "pageviews.geo_country_code",
+        "sessions": "sessions.geo_country_code",
+    },
+    "regions": {
+        "events": "events.geo_region",
+        "pageviews": "pageviews.geo_region",
+        "sessions": "sessions.geo_region",
+    },
+    "cities": {
+        "events": "events.geo_city",
+        "pageviews": "pageviews.geo_city",
+        "sessions": "sessions.geo_city",
+    },
+    "timezones": {
+        "events": "events.geo_timezone",
+        "pageviews": "pageviews.geo_timezone",
+        "sessions": "sessions.geo_timezone",
+    },
+    "asns": {
+        "events": "events.cf_asn",
+        "pageviews": "pageviews.cf_asn",
+        "sessions": "sessions.cf_asn",
+    },
+    "utm_sources": {
+        "events": "events.utm_source",
+        "pageviews": "pageviews.utm_source",
+        "sessions": "sessions.utm_source",
+    },
+    "utm_campaigns": {
+        "events": "events.utm_campaign",
+        "pageviews": "pageviews.utm_campaign",
+    },
 }
 METRICS = {
     "events.event_count": {
@@ -104,12 +184,25 @@ METRICS = {
         "context_key": "recordings",
     },
 }
+QUERY_METRICS = {
+    "events.event_count",
+    "events.unique_users",
+    "pageviews.pageviews",
+    "sessions.session_count",
+    "sessions.average_session_seconds",
+}
 DIMENSIONS = {
     "events.event_type": {
         "model": "events",
         "dimension": "event_type",
         "label": "Event",
         "title": "Events",
+    },
+    "events.pathname": {
+        "model": "events",
+        "dimension": "pathname",
+        "label": "Page",
+        "title": "Pages",
     },
     "events.browser": {
         "model": "events",
@@ -199,8 +292,14 @@ DIMENSIONS = {
     "pageviews.pathname": {
         "model": "pageviews",
         "dimension": "pathname",
-        "label": "Path",
+        "label": "Page",
         "title": "Pages",
+    },
+    "pageviews.event_type": {
+        "model": "pageviews",
+        "dimension": "event_type",
+        "label": "Event",
+        "title": "Events",
     },
     "pageviews.host": {
         "model": "pageviews",
@@ -224,55 +323,55 @@ DIMENSIONS = {
         "model": "pageviews",
         "dimension": "browser",
         "label": "Browser",
-        "title": "Pageview browsers",
+        "title": "Browsers",
     },
     "pageviews.os": {
         "model": "pageviews",
         "dimension": "os",
         "label": "OS",
-        "title": "Pageview OS",
+        "title": "Operating systems",
     },
     "pageviews.device_type": {
         "model": "pageviews",
         "dimension": "device_type",
         "label": "Device type",
-        "title": "Pageview devices",
+        "title": "Devices",
     },
     "pageviews.geo_country_code": {
         "model": "pageviews",
         "dimension": "geo_country_code",
         "label": "Country",
-        "title": "Pageview countries",
+        "title": "Countries",
     },
     "pageviews.geo_region": {
         "model": "pageviews",
         "dimension": "geo_region",
         "label": "Region",
-        "title": "Pageview regions",
+        "title": "Regions",
     },
     "pageviews.geo_city": {
         "model": "pageviews",
         "dimension": "geo_city",
         "label": "City",
-        "title": "Pageview cities",
+        "title": "Cities",
     },
     "pageviews.geo_timezone": {
         "model": "pageviews",
         "dimension": "geo_timezone",
         "label": "Timezone",
-        "title": "Pageview timezones",
+        "title": "Timezones",
     },
     "pageviews.cf_colo": {
         "model": "pageviews",
         "dimension": "cf_colo",
         "label": "Cloudflare colo",
-        "title": "Pageview Cloudflare colos",
+        "title": "Cloudflare colos",
     },
     "pageviews.cf_asn": {
         "model": "pageviews",
         "dimension": "cf_asn",
         "label": "ASN",
-        "title": "Pageview ASNs",
+        "title": "ASNs",
         "type": "numeric",
     },
     "pageviews.utm_source": {
@@ -297,74 +396,74 @@ DIMENSIONS = {
         "model": "sessions",
         "dimension": "browser",
         "label": "Browser",
-        "title": "Session browsers",
+        "title": "Browsers",
     },
     "sessions.os": {
         "model": "sessions",
         "dimension": "os",
         "label": "OS",
-        "title": "Session OS",
+        "title": "Operating systems",
     },
     "sessions.device_type": {
         "model": "sessions",
         "dimension": "device_type",
         "label": "Device type",
-        "title": "Session devices",
+        "title": "Devices",
     },
     "sessions.referrer_domain": {
         "model": "sessions",
         "dimension": "referrer_domain",
         "label": "Referring domain",
-        "title": "Session referring domains",
+        "title": "Referring domains",
     },
     "sessions.referrer": {
         "model": "sessions",
         "dimension": "referrer",
         "label": "Referrer",
-        "title": "Session referrers",
+        "title": "Referrers",
     },
     "sessions.geo_country_code": {
         "model": "sessions",
         "dimension": "geo_country_code",
         "label": "Country",
-        "title": "Session countries",
+        "title": "Countries",
     },
     "sessions.geo_region": {
         "model": "sessions",
         "dimension": "geo_region",
         "label": "Region",
-        "title": "Session regions",
+        "title": "Regions",
     },
     "sessions.geo_city": {
         "model": "sessions",
         "dimension": "geo_city",
         "label": "City",
-        "title": "Session cities",
+        "title": "Cities",
     },
     "sessions.geo_timezone": {
         "model": "sessions",
         "dimension": "geo_timezone",
         "label": "Timezone",
-        "title": "Session timezones",
+        "title": "Timezones",
     },
     "sessions.cf_colo": {
         "model": "sessions",
         "dimension": "cf_colo",
         "label": "Cloudflare colo",
-        "title": "Session Cloudflare colos",
+        "title": "Cloudflare colos",
     },
     "sessions.cf_asn": {
         "model": "sessions",
         "dimension": "cf_asn",
         "label": "ASN",
-        "title": "Session ASNs",
+        "title": "ASNs",
         "type": "numeric",
     },
     "sessions.utm_source": {
         "model": "sessions",
         "dimension": "utm_source",
         "label": "UTM source",
-        "title": "Session UTM sources",
+        "title": "UTM sources",
     },
 }
 
@@ -517,7 +616,7 @@ class SidemanticAnalytics:
             )
 
         events_summary = self._one(
-            metrics=["events.event_count", "events.unique_users", "events.snapshot_events"],
+            metrics=["events.event_count", "events.unique_users"],
             filters=events_filters,
             skip_default_time_dimensions=True,
         )
@@ -550,11 +649,6 @@ class SidemanticAnalytics:
             filters=focus_filters,
             order_by=[focus_bucket_ref],
         )
-        focus_total = self._one(
-            metrics=[metric["ref"]],
-            filters=focus_filters,
-            skip_default_time_dimensions=True,
-        )
         focus_breakdown_filters = [
             *self._filters_for(metric["model"], query, exclude_dimension_ref=dimension["ref"]),
             f"{dimension['ref']} is not null",
@@ -572,117 +666,16 @@ class SidemanticAnalytics:
             metric["metric"],
             focus_breakdown_filters,
         )
-        top_events = self._rows(
-            metrics=["events.event_count"],
-            dimensions=["events.event_type"],
-            filters=[
-                *self._filters_for("events", query, exclude_dimension_ref="events.event_type"),
-                "events.event_type is not null",
-            ],
-            order_by=["events.event_count DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        top_pages = self._rows(
-            metrics=["pageviews.pageviews"],
-            dimensions=["pageviews.pathname"],
-            filters=[
-                *self._filters_for("pageviews", query, exclude_dimension_ref="pageviews.pathname"),
-                "pageviews.pathname is not null",
-            ],
-            order_by=["pageviews.pageviews DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        domains = self._rows(
-            metrics=["pageviews.pageviews"],
-            dimensions=["pageviews.host"],
-            filters=[
-                *self._filters_for("pageviews", query, exclude_dimension_ref="pageviews.host"),
-                "pageviews.host is not null",
-            ],
-            order_by=["pageviews.pageviews DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        referring_domains = self._rows(
-            metrics=["pageviews.pageviews"],
-            dimensions=["pageviews.referrer_domain"],
-            filters=[
-                *self._filters_for("pageviews", query, exclude_dimension_ref="pageviews.referrer_domain"),
-                "pageviews.referrer_domain is not null",
-            ],
-            order_by=["pageviews.pageviews DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        referrers = self._rows(
-            metrics=["pageviews.pageviews"],
-            dimensions=["pageviews.referrer"],
-            filters=[
-                *self._filters_for("pageviews", query, exclude_dimension_ref="pageviews.referrer"),
-                "pageviews.referrer is not null",
-            ],
-            order_by=["pageviews.pageviews DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        browsers = self._rows(
-            metrics=["events.event_count"],
-            dimensions=["events.browser"],
-            filters=[
-                *self._filters_for("events", query, exclude_dimension_ref="events.browser"),
-                "events.browser is not null",
-            ],
-            order_by=["events.event_count DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        countries = self._rows(
-            metrics=["events.event_count"],
-            dimensions=["events.geo_country_code"],
-            filters=[
-                *self._filters_for("events", query, exclude_dimension_ref="events.geo_country_code"),
-                "events.geo_country_code is not null",
-            ],
-            order_by=["events.event_count DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        regions = self._rows(
-            metrics=["events.event_count"],
-            dimensions=["events.geo_region"],
-            filters=[
-                *self._filters_for("events", query, exclude_dimension_ref="events.geo_region"),
-                "events.geo_region is not null",
-            ],
-            order_by=["events.event_count DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
-        cities = self._rows(
-            metrics=["events.event_count"],
-            dimensions=["events.geo_city"],
-            filters=[
-                *self._filters_for("events", query, exclude_dimension_ref="events.geo_city"),
-                "events.geo_city is not null",
-            ],
-            order_by=["events.event_count DESC"],
-            limit=top_limit,
-            skip_default_time_dimensions=True,
-        )
 
         event_count = to_int(events_summary.get("event_count"))
         pageviews = to_int(pageviews_summary.get("pageviews"))
         unique_users = to_int(events_summary.get("unique_users"))
         session_count = to_int(sessions_summary.get("session_count"))
         average_session_seconds = to_float(sessions_summary.get("average_session_seconds"))
-        replay_chunks = to_int(events_summary.get("snapshot_events"))
-        focus_value = to_float(focus_total.get(metric["metric"]))
 
         breakdowns = [
             breakdown(
-                f"{metric['label']} by {dimension['label']}",
+                dimension["title"],
                 dimension["model"],
                 dimension["dimension"],
                 metric["ref"],
@@ -692,98 +685,10 @@ class SidemanticAnalytics:
                 focus_breakdown_total,
             )
         ]
-        for candidate in [
-            breakdown(
-                "Events by Event",
-                "events",
-                "event_type",
-                "events.event_count",
-                top_events,
-                "event_type",
-                "event_count",
-                event_count,
-            ),
-            breakdown(
-                "Pageviews by Page",
-                "pageviews",
-                "pathname",
-                "pageviews.pageviews",
-                top_pages,
-                "pathname",
-                "pageviews",
-                pageviews,
-            ),
-            breakdown(
-                "Pageviews by Domain",
-                "pageviews",
-                "host",
-                "pageviews.pageviews",
-                domains,
-                "host",
-                "pageviews",
-                pageviews,
-            ),
-            breakdown(
-                "Pageviews by Referring domain",
-                "pageviews",
-                "referrer_domain",
-                "pageviews.pageviews",
-                referring_domains,
-                "referrer_domain",
-                "pageviews",
-                pageviews,
-            ),
-            breakdown(
-                "Pageviews by Referrer",
-                "pageviews",
-                "referrer",
-                "pageviews.pageviews",
-                referrers,
-                "referrer",
-                "pageviews",
-                pageviews,
-            ),
-            breakdown(
-                "Events by Browser",
-                "events",
-                "browser",
-                "events.event_count",
-                browsers,
-                "browser",
-                "event_count",
-                event_count,
-            ),
-            breakdown(
-                "Events by Country",
-                "events",
-                "geo_country_code",
-                "events.event_count",
-                countries,
-                "geo_country_code",
-                "event_count",
-                event_count,
-            ),
-            breakdown(
-                "Events by Region",
-                "events",
-                "geo_region",
-                "events.event_count",
-                regions,
-                "geo_region",
-                "event_count",
-                event_count,
-            ),
-            breakdown(
-                "Events by City",
-                "events",
-                "geo_city",
-                "events.event_count",
-                cities,
-                "geo_city",
-                "event_count",
-                event_count,
-            ),
-        ]:
+        for panel in panel_keys_for_metric(metric):
+            candidate = self._leaderboard_panel(panel, query, top_limit, metric)
+            if not candidate:
+                continue
             if not any(same_breakdown(candidate, existing) for existing in breakdowns):
                 breakdowns.append(candidate)
 
@@ -806,7 +711,6 @@ class SidemanticAnalytics:
                     "sessions",
                     "average_session_seconds",
                 ),
-                count_metric("Replay chunks", replay_chunks, "events", "snapshot_events"),
             ],
             "series": series_points(
                 context_series_rows,
@@ -836,7 +740,7 @@ class SidemanticAnalytics:
 
         if panel == "summary":
             events_summary = self._one(
-                metrics=["events.event_count", "events.unique_users", "events.snapshot_events"],
+                metrics=["events.event_count", "events.unique_users"],
                 filters=events_filters,
                 skip_default_time_dimensions=True,
             )
@@ -861,7 +765,6 @@ class SidemanticAnalytics:
                     "sessions",
                     "average_session_seconds",
                 ),
-                count_metric("Replay chunks", to_int(events_summary.get("snapshot_events")), "events", "snapshot_events"),
             ]
             return response
 
@@ -914,7 +817,7 @@ class SidemanticAnalytics:
             )
             response["breakdowns"] = [
                 breakdown(
-                    f"{metric['label']} by {dimension['label']}",
+                    dimension["title"],
                     dimension["model"],
                     dimension["dimension"],
                     metric["ref"],
@@ -926,7 +829,7 @@ class SidemanticAnalytics:
             ]
             return response
 
-        leaderboard = self._leaderboard_panel(panel, query, top_limit)
+        leaderboard = self._leaderboard_panel(panel, query, top_limit, metric)
         if leaderboard:
             response["breakdowns"] = [leaderboard]
         return response
@@ -936,43 +839,35 @@ class SidemanticAnalytics:
         panel: str,
         query: dict[str, Any],
         top_limit: int,
+        metric: dict[str, Any],
     ) -> dict[str, Any] | None:
-        configs = {
-            "top_events": ("Events by Event", "events", "event_type", "events.event_count", "event_count"),
-            "top_pages": ("Pageviews by Page", "pageviews", "pathname", "pageviews.pageviews", "pageviews"),
-            "domains": ("Pageviews by Domain", "pageviews", "host", "pageviews.pageviews", "pageviews"),
-            "referring_domains": (
-                "Pageviews by Referring domain",
-                "pageviews",
-                "referrer_domain",
-                "pageviews.pageviews",
-                "pageviews",
-            ),
-            "referrers": ("Pageviews by Referrer", "pageviews", "referrer", "pageviews.pageviews", "pageviews"),
-            "browsers": ("Events by Browser", "events", "browser", "events.event_count", "event_count"),
-            "countries": ("Events by Country", "events", "geo_country_code", "events.event_count", "event_count"),
-            "regions": ("Events by Region", "events", "geo_region", "events.event_count", "event_count"),
-            "cities": ("Events by City", "events", "geo_city", "events.event_count", "event_count"),
-        }
-        config = configs.get(panel)
-        if not config:
+        dimension_ref = PANEL_DIMENSIONS.get(panel, {}).get(metric["model"])
+        if not dimension_ref:
             return None
-        title, model, dimension, metric_ref, value_key = config
-        dimension_ref = f"{model}.{dimension}"
+        dimension_defn = DIMENSIONS[dimension_ref]
         filters = [
-            *self._filters_for(model, query, exclude_dimension_ref=dimension_ref),
+            *self._filters_for(metric["model"], query, exclude_dimension_ref=dimension_ref),
             f"{dimension_ref} is not null",
         ]
         rows = self._rows(
-            metrics=[metric_ref],
+            metrics=[metric["ref"]],
             dimensions=[dimension_ref],
             filters=filters,
-            order_by=[f"{metric_ref} DESC"],
+            order_by=[f"{metric['ref']} DESC"],
             limit=top_limit,
             skip_default_time_dimensions=True,
         )
-        total = self._metric_total(metric_ref, value_key, filters)
-        return breakdown(title, model, dimension, metric_ref, rows, dimension, value_key, total)
+        total = self._metric_total(metric["ref"], metric["metric"], filters)
+        return breakdown(
+            dimension_defn["title"],
+            dimension_defn["model"],
+            dimension_defn["dimension"],
+            metric["ref"],
+            rows,
+            dimension_defn["dimension"],
+            metric["metric"],
+            total,
+        )
 
     @staticmethod
     def _empty_response(metric: dict[str, Any], dimension: dict[str, Any], granularity: str) -> dict[str, Any]:
@@ -1151,8 +1046,8 @@ class SidemanticAnalytics:
 
 def metric_def(value: Any) -> dict[str, Any]:
     ref = clean(value) or "events.event_count"
-    if ref not in METRICS:
-        ref = "events.event_count"
+    if ref not in QUERY_METRICS:
+        raise ValueError(f"Unsupported analytics metric: {ref}")
     metric = dict(METRICS[ref])
     metric["ref"] = ref
     return metric
@@ -1170,6 +1065,14 @@ def dimension_def(value: Any, model: str) -> dict[str, Any]:
 def granularity_for(value: Any) -> str:
     granularity = clean(value) or "day"
     return granularity if granularity in GRANULARITIES else "day"
+
+
+def panel_keys_for_metric(metric: dict[str, Any]) -> list[str]:
+    return [
+        panel
+        for panel in LEADERBOARD_PANELS
+        if metric["model"] in PANEL_DIMENSIONS.get(panel, {})
+    ]
 
 
 def semantic_filters_for(

@@ -60,6 +60,7 @@
         display: grid;
         --rail-track: minmax(320px, 380px);
         --inspector-track: minmax(330px, 420px);
+        --analytics-nav-width: 320px;
         grid-template-columns: var(--rail-track) minmax(560px, 1fr) var(--inspector-track);
         height: 100vh;
         min-height: 0;
@@ -130,6 +131,45 @@
         z-index: 20;
       }
 
+      .app.analytics-mode {
+        --rail-track: 0px;
+      }
+
+      .app.analytics-mode .rail {
+        position: fixed;
+        top: 0;
+        left: 0;
+        z-index: 30;
+        width: var(--analytics-nav-width);
+        height: 56px;
+        min-height: 56px;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+        pointer-events: auto;
+      }
+
+      .app.analytics-mode .rail-content {
+        display: block;
+      }
+
+      .app.analytics-mode .topbar {
+        border-bottom: 0;
+      }
+
+      .app.analytics-mode .rail-body,
+      .app.analytics-mode .rail-dock {
+        display: none;
+      }
+
+      .app.analytics-mode .stage-head {
+        padding-left: calc(var(--analytics-nav-width) + 16px);
+      }
+
+      .app.analytics-mode .stage {
+        grid-column: 1 / -1;
+      }
+
       .topbar,
       .stage-head,
       .inspector-head {
@@ -162,15 +202,15 @@
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 34px;
-        height: 40px;
+        width: 28px;
+        height: 32px;
         color: var(--ink);
       }
 
       .brand-mark svg {
         display: block;
-        width: 34px;
-        height: 40px;
+        width: 28px;
+        height: 32px;
       }
 
       h1,
@@ -523,7 +563,12 @@
 
       .field input:focus,
       .field select:focus,
-      .date-field input:focus {
+      .date-field input:focus,
+      .analytics-filter-popover input:focus,
+      .analytics-filter-popover select:focus,
+      .analytics-date-popover input:focus,
+      .analytics-date-popover select:focus,
+      .analytics-grain-select:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 2px var(--accent-soft);
       }
@@ -567,7 +612,8 @@
       .preset-button:disabled,
       .mode-button:disabled,
       .section-button:disabled,
-      .chip-button:disabled {
+      .chip-button:disabled,
+      .analytics-filter-trigger:disabled {
         cursor: wait;
         opacity: 0.56;
         transform: none !important;
@@ -665,6 +711,10 @@
         display: none;
       }
 
+      .app.inspector-unavailable .inspector-dock {
+        display: none;
+      }
+
       @media (hover: hover) {
         .button:hover {
           background: #2a2d2a;
@@ -675,7 +725,9 @@
         .preset-button:hover,
         .row-button:hover,
         .timeline-row:hover,
-        .panel-toggle:hover {
+        .panel-toggle:hover,
+        .analytics-filter-trigger:hover,
+        .analytics-date-trigger:hover {
           background: var(--surface-soft);
           border-color: var(--line-strong);
           color: var(--ink);
@@ -827,16 +879,207 @@
 
       .chart-overview {
         display: grid;
-        grid-template-rows: auto minmax(286px, 0.85fr) auto;
+        grid-template-rows: auto auto minmax(286px, 0.85fr) auto;
         gap: 0;
         min-height: 100%;
-        max-width: 100%;
+        width: calc(100% + 2px);
+        max-width: none;
+        margin-inline: -1px;
         overflow: auto;
+      }
+
+      .analytics-control-bar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-width: 0;
+        gap: 12px;
+        min-height: 44px;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+        padding: 7px 12px;
+      }
+
+      .analytics-control-left,
+      .analytics-control-right,
+      .analytics-active-filters {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 6px;
+      }
+
+      .analytics-control-left {
+        flex: 1 1 auto;
+        flex-wrap: wrap;
+      }
+
+      .analytics-control-right {
+        flex: 0 0 auto;
+        margin-left: auto;
+      }
+
+      .analytics-active-filters {
+        flex-wrap: wrap;
+      }
+
+      .analytics-filter-menu,
+      .analytics-date-menu {
+        position: relative;
+        flex: 0 0 auto;
+      }
+
+      .analytics-filter-menu summary,
+      .analytics-date-menu summary {
+        list-style: none;
+      }
+
+      .analytics-filter-menu summary::-webkit-details-marker,
+      .analytics-date-menu summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .analytics-filter-trigger,
+      .analytics-date-trigger {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 30px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--muted);
+        transition:
+          color 140ms ease,
+          transform 140ms ease;
+      }
+
+      .analytics-filter-trigger {
+        width: 30px;
+      }
+
+      .analytics-filter-trigger svg {
+        display: block;
+        width: 18px;
+        height: 18px;
+        stroke-width: 1.9;
+      }
+
+      .analytics-date-trigger {
+        gap: 8px;
+        min-width: 0;
+        padding: 0;
+        color: var(--ink);
+        font-family: var(--mono);
+        font-size: 12px;
+        font-weight: 720;
+      }
+
+      .analytics-date-trigger svg {
+        display: block;
+        width: 13px;
+        height: 13px;
+        color: var(--muted);
+        stroke-width: 2;
+      }
+
+      .analytics-filter-menu[open] .analytics-filter-trigger,
+      .analytics-date-menu[open] .analytics-date-trigger {
+        color: var(--ink);
+      }
+
+      .analytics-filter-popover,
+      .analytics-date-popover {
+        position: absolute;
+        top: calc(100% + 6px);
+        right: 0;
+        z-index: 50;
+        display: grid;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        box-shadow: 0 14px 34px rgba(16, 24, 40, 0.14);
+        padding: 10px;
+      }
+
+      .analytics-filter-popover {
+        width: 286px;
+        right: auto;
+        left: 0;
+      }
+
+      .analytics-date-popover {
+        width: 360px;
+      }
+
+      .analytics-filter-popover label {
+        display: grid;
+        gap: 5px;
+      }
+
+      .analytics-filter-popover input,
+      .analytics-filter-popover select,
+      .analytics-date-popover input,
+      .analytics-date-popover select,
+      .analytics-grain-select {
+        height: 30px;
+        min-width: 0;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        background: var(--surface);
+        color: var(--ink);
+        font: inherit;
+        font-size: 12px;
+        outline: none;
+        padding: 0 8px;
+      }
+
+      .analytics-filter-popover input,
+      .analytics-filter-popover select,
+      .analytics-date-popover input,
+      .analytics-date-popover select {
+        width: 100%;
+      }
+
+      .analytics-date-presets {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .analytics-date-option {
+        justify-content: flex-start;
+        width: 100%;
+        height: 30px;
+        text-align: left;
+      }
+
+      .analytics-custom-range {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        border-top: 1px solid var(--line);
+        padding-top: 10px;
+      }
+
+      .analytics-custom-range label {
+        display: grid;
+        gap: 5px;
+      }
+
+      .analytics-date-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+
+      .analytics-grain-select {
+        width: 100%;
       }
 
       .metric-grid {
         display: grid;
-        grid-template-columns: repeat(6, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         border-bottom: 1px solid var(--line);
       }
 
@@ -855,21 +1098,22 @@
         text-align: left;
       }
 
+      .metric-card.is-selectable {
+        cursor: pointer;
+      }
+
       .metric-card.is-skeleton {
         cursor: default;
         pointer-events: none;
       }
 
-      .metric-card:last-child {
-        border-right: 0;
-      }
-
       .metric-card.is-selected {
         background: var(--surface-soft);
+        box-shadow: inset 0 -2px 0 var(--accent);
       }
 
-      .metric-card.is-selected {
-        box-shadow: inset 0 -2px 0 var(--accent);
+      .metric-card:last-child {
+        border-right: 0;
       }
 
       .metric-card:focus-visible,
@@ -912,7 +1156,6 @@
         min-height: 0;
         min-width: 0;
         overflow: hidden;
-        border-bottom: 1px solid var(--line);
       }
 
       .chart-panel-head {
@@ -982,7 +1225,8 @@
         grid-auto-flow: dense;
         grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
         background: var(--surface);
-        border-bottom: 1px solid var(--line);
+        overflow: hidden;
+        padding: 1px 0 0 1px;
       }
 
       .breakdown-list {
@@ -1046,41 +1290,11 @@
       }
 
       .breakdown-grid .chart-panel {
-        border-bottom: 0;
+        box-sizing: border-box;
+        border: 1px solid var(--line);
         background: var(--surface);
+        margin: -1px 0 0 -1px;
         overflow: hidden;
-      }
-
-      .breakdown-grid .chart-panel:first-child {
-        grid-column: span 2;
-      }
-
-      .breakdown-grid .chart-panel:nth-child(n + 3) {
-        border-top: 1px solid var(--line);
-      }
-
-      .breakdown-grid .chart-panel:nth-child(2),
-      .breakdown-grid .chart-panel:nth-child(4),
-      .breakdown-grid .chart-panel:nth-child(5),
-      .breakdown-grid .chart-panel:nth-child(7),
-      .breakdown-grid .chart-panel:nth-child(8),
-      .breakdown-grid .chart-panel:nth-child(10) {
-        border-left: 1px solid var(--line);
-      }
-
-      .breakdown-grid .chart-panel:nth-child(9) {
-        border-right: 1px solid var(--line);
-      }
-
-      .breakdown-grid .chart-panel:nth-child(9)::before {
-        position: absolute;
-        top: -1px;
-        left: 100%;
-        width: 200%;
-        height: 1px;
-        background: var(--line);
-        content: "";
-        pointer-events: none;
       }
 
       .breakdown-row {
@@ -1300,6 +1514,10 @@
           --rail-track: 0px;
         }
 
+        .app.analytics-mode {
+          --rail-track: 0px;
+        }
+
         .app.inspector-collapsed {
           --inspector-track: minmax(0, 1fr);
         }
@@ -1333,6 +1551,20 @@
           border-bottom: 1px solid var(--line);
         }
 
+        .app.analytics-mode {
+          --analytics-nav-width: 100vw;
+        }
+
+        .app.analytics-mode .rail {
+          width: 100vw;
+          border-right: 0;
+        }
+
+        .app.analytics-mode .stage-head {
+          height: auto;
+          padding: 64px 16px 8px;
+        }
+
         .filters {
           grid-template-columns: 1fr;
         }
@@ -1351,35 +1583,21 @@
           width: 100%;
         }
 
+        .analytics-control-bar,
+        .analytics-control-right {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .analytics-control-right {
+          margin-left: 0;
+        }
+
         .metric-grid,
         .breakdown-grid {
           grid-template-columns: 1fr;
         }
 
-        .breakdown-grid .chart-panel:first-child {
-          grid-column: span 1;
-        }
-
-        .breakdown-grid .chart-panel:nth-child(n + 2) {
-          border-top: 1px solid var(--line);
-        }
-
-        .breakdown-grid .chart-panel:nth-child(2),
-        .breakdown-grid .chart-panel:nth-child(4),
-        .breakdown-grid .chart-panel:nth-child(5),
-        .breakdown-grid .chart-panel:nth-child(7),
-        .breakdown-grid .chart-panel:nth-child(8),
-        .breakdown-grid .chart-panel:nth-child(10) {
-          border-left: 0;
-        }
-
-        .breakdown-grid .chart-panel:nth-child(9) {
-          border-right: 0;
-        }
-
-        .breakdown-grid .chart-panel:nth-child(9)::before {
-          display: none;
-        }
       }
     </style>
   </head>
@@ -1390,22 +1608,11 @@
           <header class="topbar">
             <div class="topbar-primary">
               <span class="brand-mark" aria-label="Hogflare" role="img">
-                <svg viewBox="0 0 64 72" aria-hidden="true" fill="none" stroke="currentColor">
+                <svg viewBox="0 0 733 868" aria-hidden="true" focusable="false">
                   <path
-                    d="M12 54c-5-10-4-28 5-39C24 6 38 5 48 13c8 7 11 20 7 31-3 10-11 17-23 17-9 0-16-2-20-7Z"
-                    stroke-width="4"
-                    stroke-linejoin="round"
+                    fill="currentColor"
+                    d="M253 19 L253 24 L260 30 L259 32 L253 33 L250 36 L231 43 L209 56 L187 72 L176 67 L170 67 L169 73 L180 78 L166 91 L156 88 L142 89 L141 92 L143 94 L156 96 L159 99 L145 113 L130 133 L115 157 L113 164 L103 181 L87 230 L82 262 L62 271 L53 279 L53 282 L57 282 L69 276 L78 274 L75 293 L62 300 L55 307 L55 311 L59 311 L70 304 L72 305 L63 341 L60 361 L58 364 L58 370 L54 381 L54 387 L47 410 L46 421 L44 423 L42 438 L39 444 L39 452 L31 479 L29 496 L27 498 L16 550 L14 552 L13 562 L11 565 L7 593 L4 599 L0 644 L6 680 L9 681 L12 686 L12 691 L14 692 L16 701 L24 719 L35 737 L48 753 L59 764 L87 785 L115 797 L120 801 L142 807 L170 810 L354 809 L356 813 L355 825 L357 826 L356 840 L361 853 L373 861 L393 865 L413 864 L426 856 L426 844 L428 843 L424 834 L422 815 L425 809 L479 809 L481 812 L482 824 L480 835 L483 836 L481 841 L483 842 L490 857 L496 861 L517 867 L541 867 L550 861 L554 851 L554 842 L549 817 L550 810 L564 808 L577 809 L616 800 L627 796 L634 790 L639 789 L643 785 L655 779 L688 749 L699 734 L713 709 L716 698 L719 696 L722 682 L726 681 L728 677 L732 649 L730 609 L723 589 L718 562 L716 561 L713 541 L708 528 L704 503 L701 499 L696 471 L691 458 L691 452 L670 368 L666 344 L657 314 L654 294 L652 292 L649 275 L647 273 L647 265 L643 257 L645 252 L663 245 L677 234 L688 222 L699 201 L706 169 L702 125 L710 105 L709 92 L705 86 L690 78 L668 74 L646 74 L625 78 L604 86 L574 107 L553 85 L554 72 L552 69 L547 71 L546 77 L544 78 L530 67 L530 59 L526 47 L522 47 L522 59 L520 60 L493 43 L462 29 L424 18 L398 14 L396 9 L388 0 L384 2 L387 13 L371 11 L332 13 L301 18 L299 20 L268 27 L257 19 Z"
                   />
-                  <path d="M19 18 13 8M29 12 27 3M42 14 45 5" stroke-width="4" stroke-linecap="round" />
-                  <path d="M24 25c-4-3-9-2-11 3M43 25c4-4 10-3 12 2" stroke-width="4" stroke-linecap="round" />
-                  <path
-                    d="M23 42c3-5 15-6 20-1 3 3 2 8-2 11-6 4-17 3-21-1-3-3-1-7 3-9Z"
-                    stroke-width="4"
-                    stroke-linejoin="round"
-                  />
-                  <path d="M27 44v5M37 44v5" stroke-width="4" stroke-linecap="round" />
-                  <path d="M24 35h.1M42 35h.1" stroke-width="5" stroke-linecap="round" />
-                  <path d="M16 60v6M45 59v7" stroke-width="4" stroke-linecap="round" />
                 </svg>
               </span>
               <nav class="section-switch" aria-label="Viewer section">
@@ -1427,9 +1634,15 @@
               <div class="date-presets" aria-label="Date range presets">
                 <button class="preset-button" type="button" data-date-preset="today" aria-pressed="false">Today</button>
                 <button class="preset-button" type="button" data-date-preset="24h" aria-pressed="false">Last 24h</button>
+                <button class="preset-button" type="button" data-date-preset="72h" aria-pressed="false">Last 72h</button>
                 <button class="preset-button" type="button" data-date-preset="7d" aria-pressed="false">Last 7d</button>
+                <button class="preset-button" type="button" data-date-preset="14d" aria-pressed="false">Last 14d</button>
                 <button class="preset-button" type="button" data-date-preset="30d" aria-pressed="true">Last 30d</button>
-                <button class="preset-button" type="button" data-date-preset="clear" aria-pressed="false">Clear dates</button>
+                <button class="preset-button" type="button" data-date-preset="quarter" aria-pressed="false">Quarter</button>
+                <button class="preset-button" type="button" data-date-preset="year" aria-pressed="false">Year</button>
+                <button class="preset-button" type="button" data-date-preset="2y" aria-pressed="false">2y</button>
+                <button class="preset-button" type="button" data-date-preset="5y" aria-pressed="false">5y</button>
+                <button class="preset-button" type="button" data-date-preset="max" aria-pressed="false">Max</button>
               </div>
               <div class="date-inputs">
                 <label class="date-field" for="dateFrom">
@@ -1440,6 +1653,15 @@
                   <span>To</span>
                   <input id="dateTo" name="date_to" type="datetime-local" autocomplete="off" step="60" />
                 </label>
+              </div>
+              <div class="field wide" data-section="analytics">
+                <label class="label" for="granularity">Date grain</label>
+                <select id="granularity" name="granularity">
+                  <option value="hour">Hour</option>
+                  <option value="day" selected>Day</option>
+                  <option value="week">Week</option>
+                  <option value="month">Month</option>
+                </select>
               </div>
             </div>
             <div class="field" data-section="replays">
@@ -1466,7 +1688,6 @@
                     <optgroup label="Events">
                       <option value="events.event_count">Events</option>
                       <option value="events.unique_users">Users</option>
-                      <option value="events.snapshot_events">Replay chunks</option>
                     </optgroup>
                     <optgroup label="Pageviews">
                       <option value="pageviews.pageviews">Pageviews</option>
@@ -1477,66 +1698,7 @@
                     </optgroup>
                   </select>
                 </div>
-                <div class="field wide">
-                  <label class="label" for="dimension">Breakdown</label>
-                  <select id="dimension" name="dimension">
-                    <optgroup label="Events">
-                      <option value="events.event_type" data-model="events">Event</option>
-                      <option value="events.browser" data-model="events">Browser</option>
-                      <option value="events.os" data-model="events">OS</option>
-                      <option value="events.device_type" data-model="events">Device</option>
-                      <option value="events.host" data-model="events">Host</option>
-                      <option value="events.referrer_domain" data-model="events">Referring domain</option>
-                      <option value="events.referrer" data-model="events">Referrer</option>
-                      <option value="events.geo_country_code" data-model="events">Country</option>
-                      <option value="events.geo_region" data-model="events">Region</option>
-                      <option value="events.geo_city" data-model="events">City</option>
-                      <option value="events.geo_timezone" data-model="events">Timezone</option>
-                      <option value="events.cf_asn" data-model="events">ASN</option>
-                      <option value="events.utm_source" data-model="events">UTM source</option>
-                      <option value="events.utm_campaign" data-model="events">UTM campaign</option>
-                    </optgroup>
-                    <optgroup label="Pageviews">
-                      <option value="pageviews.pathname" data-model="pageviews">Path</option>
-                      <option value="pageviews.host" data-model="pageviews">Host</option>
-                      <option value="pageviews.referrer_domain" data-model="pageviews">Referring domain</option>
-                      <option value="pageviews.referrer" data-model="pageviews">Referrer</option>
-                      <option value="pageviews.browser" data-model="pageviews">Browser</option>
-                      <option value="pageviews.os" data-model="pageviews">OS</option>
-                      <option value="pageviews.device_type" data-model="pageviews">Device</option>
-                      <option value="pageviews.geo_country_code" data-model="pageviews">Country</option>
-                      <option value="pageviews.geo_region" data-model="pageviews">Region</option>
-                      <option value="pageviews.geo_city" data-model="pageviews">City</option>
-                      <option value="pageviews.geo_timezone" data-model="pageviews">Timezone</option>
-                      <option value="pageviews.cf_asn" data-model="pageviews">ASN</option>
-                      <option value="pageviews.utm_source" data-model="pageviews">UTM source</option>
-                      <option value="pageviews.utm_campaign" data-model="pageviews">UTM campaign</option>
-                    </optgroup>
-                    <optgroup label="Sessions">
-                      <option value="sessions.landing_path" data-model="sessions">Landing path</option>
-                      <option value="sessions.browser" data-model="sessions">Browser</option>
-                      <option value="sessions.os" data-model="sessions">OS</option>
-                      <option value="sessions.device_type" data-model="sessions">Device</option>
-                      <option value="sessions.referrer_domain" data-model="sessions">Referring domain</option>
-                      <option value="sessions.referrer" data-model="sessions">Referrer</option>
-                      <option value="sessions.geo_country_code" data-model="sessions">Country</option>
-                      <option value="sessions.geo_region" data-model="sessions">Region</option>
-                      <option value="sessions.geo_city" data-model="sessions">City</option>
-                      <option value="sessions.geo_timezone" data-model="sessions">Timezone</option>
-                      <option value="sessions.cf_asn" data-model="sessions">ASN</option>
-                      <option value="sessions.utm_source" data-model="sessions">UTM source</option>
-                    </optgroup>
-                  </select>
-                </div>
-                <div class="field wide">
-                  <label class="label" for="granularity">Trend grain</label>
-                  <select id="granularity" name="granularity">
-                    <option value="hour">Hour</option>
-                    <option value="day" selected>Day</option>
-                    <option value="week">Week</option>
-                    <option value="month">Month</option>
-                  </select>
-                </div>
+                <input id="dimension" type="hidden" value="events.event_type" />
               </div>
               <input id="semanticFilters" name="semantic_filters" type="hidden" />
               <div class="semantic-filter-block is-hidden" id="semanticFilterBlock">
@@ -1807,6 +1969,8 @@
         dateFrom: document.getElementById("dateFrom"),
         dateTo: document.getElementById("dateTo"),
         datePresets: document.querySelector(".date-presets"),
+        url: document.getElementById("url"),
+        eventName: document.getElementById("eventName"),
         metric: document.getElementById("metric"),
         dimension: document.getElementById("dimension"),
         granularity: document.getElementById("granularity"),
@@ -1875,6 +2039,7 @@
         analyticsPendingPanels: new Set(),
         railCollapsed: false,
         inspectorCollapsed: false,
+        userInspectorCollapsed: null,
       };
 
       const playerControllerHeight = 80;
@@ -1891,7 +2056,6 @@
       const analyticsMetricModels = {
         "events.event_count": "events",
         "events.unique_users": "events",
-        "events.snapshot_events": "events",
         "pageviews.pageviews": "pageviews",
         "sessions.session_count": "sessions",
         "sessions.average_session_seconds": "sessions",
@@ -1902,33 +2066,124 @@
         pageviews: "pageviews.pathname",
         sessions: "sessions.landing_path",
       };
-      const analyticsBreakdownLimit = 10;
-
       const analyticsPanelOrder = [
         "summary",
         "series",
-        "focus_breakdown",
         "top_events",
         "top_pages",
         "domains",
         "referring_domains",
         "referrers",
         "browsers",
+        "operating_systems",
+        "devices",
         "countries",
         "regions",
         "cities",
+        "timezones",
+        "asns",
+        "utm_sources",
+        "utm_campaigns",
       ];
-      const analyticsBuiltInBreakdownPanels = {
-        "events.event_type": "top_events",
-        "pageviews.pathname": "top_pages",
-        "pageviews.host": "domains",
-        "pageviews.referrer_domain": "referring_domains",
-        "pageviews.referrer": "referrers",
-        "events.browser": "browsers",
-        "events.geo_country_code": "countries",
-        "events.geo_region": "regions",
-        "events.geo_city": "cities",
+      const analyticsLeaderboardDimensions = {
+        events: {
+          top_events: "events.event_type",
+          top_pages: "events.pathname",
+          domains: "events.host",
+          referring_domains: "events.referrer_domain",
+          referrers: "events.referrer",
+          browsers: "events.browser",
+          operating_systems: "events.os",
+          devices: "events.device_type",
+          countries: "events.geo_country_code",
+          regions: "events.geo_region",
+          cities: "events.geo_city",
+          timezones: "events.geo_timezone",
+          asns: "events.cf_asn",
+          utm_sources: "events.utm_source",
+          utm_campaigns: "events.utm_campaign",
+        },
+        pageviews: {
+          top_events: "pageviews.event_type",
+          top_pages: "pageviews.pathname",
+          domains: "pageviews.host",
+          referring_domains: "pageviews.referrer_domain",
+          referrers: "pageviews.referrer",
+          browsers: "pageviews.browser",
+          operating_systems: "pageviews.os",
+          devices: "pageviews.device_type",
+          countries: "pageviews.geo_country_code",
+          regions: "pageviews.geo_region",
+          cities: "pageviews.geo_city",
+          timezones: "pageviews.geo_timezone",
+          asns: "pageviews.cf_asn",
+          utm_sources: "pageviews.utm_source",
+          utm_campaigns: "pageviews.utm_campaign",
+        },
+        sessions: {
+          top_pages: "sessions.landing_path",
+          referring_domains: "sessions.referrer_domain",
+          referrers: "sessions.referrer",
+          browsers: "sessions.browser",
+          operating_systems: "sessions.os",
+          devices: "sessions.device_type",
+          countries: "sessions.geo_country_code",
+          regions: "sessions.geo_region",
+          cities: "sessions.geo_city",
+          timezones: "sessions.geo_timezone",
+          asns: "sessions.cf_asn",
+          utm_sources: "sessions.utm_source",
+        },
       };
+      const analyticsDimensionMeta = {
+        "events.event_type": { label: "Event", title: "Events" },
+        "events.pathname": { label: "Page", title: "Pages" },
+        "events.host": { label: "Host", title: "Domains" },
+        "events.referrer_domain": { label: "Referring domain", title: "Referring domains" },
+        "events.referrer": { label: "Referrer", title: "Referrers" },
+        "events.browser": { label: "Browser", title: "Browsers" },
+        "events.os": { label: "OS", title: "Operating systems" },
+        "events.device_type": { label: "Device", title: "Devices" },
+        "events.geo_country_code": { label: "Country", title: "Countries" },
+        "events.geo_region": { label: "Region", title: "Regions" },
+        "events.geo_city": { label: "City", title: "Cities" },
+        "events.geo_timezone": { label: "Timezone", title: "Timezones" },
+        "events.cf_asn": { label: "ASN", title: "ASNs" },
+        "events.utm_source": { label: "UTM source", title: "UTM sources" },
+        "events.utm_campaign": { label: "UTM campaign", title: "UTM campaigns" },
+        "pageviews.event_type": { label: "Event", title: "Events" },
+        "pageviews.pathname": { label: "Page", title: "Pages" },
+        "pageviews.host": { label: "Host", title: "Domains" },
+        "pageviews.referrer_domain": { label: "Referring domain", title: "Referring domains" },
+        "pageviews.referrer": { label: "Referrer", title: "Referrers" },
+        "pageviews.browser": { label: "Browser", title: "Browsers" },
+        "pageviews.os": { label: "OS", title: "Operating systems" },
+        "pageviews.device_type": { label: "Device", title: "Devices" },
+        "pageviews.geo_country_code": { label: "Country", title: "Countries" },
+        "pageviews.geo_region": { label: "Region", title: "Regions" },
+        "pageviews.geo_city": { label: "City", title: "Cities" },
+        "pageviews.geo_timezone": { label: "Timezone", title: "Timezones" },
+        "pageviews.cf_asn": { label: "ASN", title: "ASNs" },
+        "pageviews.utm_source": { label: "UTM source", title: "UTM sources" },
+        "pageviews.utm_campaign": { label: "UTM campaign", title: "UTM campaigns" },
+        "sessions.landing_path": { label: "Landing path", title: "Landing paths" },
+        "sessions.referrer_domain": { label: "Referring domain", title: "Referring domains" },
+        "sessions.referrer": { label: "Referrer", title: "Referrers" },
+        "sessions.browser": { label: "Browser", title: "Browsers" },
+        "sessions.os": { label: "OS", title: "Operating systems" },
+        "sessions.device_type": { label: "Device", title: "Devices" },
+        "sessions.geo_country_code": { label: "Country", title: "Countries" },
+        "sessions.geo_region": { label: "Region", title: "Regions" },
+        "sessions.geo_city": { label: "City", title: "Cities" },
+        "sessions.geo_timezone": { label: "Timezone", title: "Timezones" },
+        "sessions.cf_asn": { label: "ASN", title: "ASNs" },
+        "sessions.utm_source": { label: "UTM source", title: "UTM sources" },
+      };
+      const analyticsBuiltInBreakdownPanels = Object.fromEntries(
+        Object.values(analyticsLeaderboardDimensions).flatMap((panels) =>
+          Object.entries(panels).map(([panel, dimension]) => [dimension, panel]),
+        ),
+      );
 
       const funnelEventOptions = [
         "",
@@ -1941,6 +2196,19 @@
       ];
       const defaultFunnelSteps = ["Viewed Pricing", "Checkout Started", ""];
       const defaultAnalyticsDatePreset = "30d";
+      const datePresetOptions = [
+        { key: "today", label: "Today", shortLabel: "Today" },
+        { key: "24h", label: "Past 24h", shortLabel: "24h" },
+        { key: "72h", label: "Past 72h", shortLabel: "72h" },
+        { key: "7d", label: "Past 7d", shortLabel: "7d" },
+        { key: "14d", label: "Past 14d", shortLabel: "14d" },
+        { key: "30d", label: "Past 30d", shortLabel: "30d" },
+        { key: "quarter", label: "Past quarter", shortLabel: "Quarter" },
+        { key: "year", label: "Past year", shortLabel: "1y" },
+        { key: "2y", label: "Past 2 years", shortLabel: "2y" },
+        { key: "5y", label: "Past 5 years", shortLabel: "5y" },
+        { key: "max", label: "Max", shortLabel: "Max" },
+      ];
       const analyticsPath = "/analytics";
       const replayPath = "/replay";
 
@@ -2020,9 +2288,10 @@
       }
 
       function applyDatePreset(preset) {
-        if (preset === "clear") {
+        if (preset === "max") {
           setDateRange(null, null);
-          setDatePresetState("clear");
+          setGranularityForDatePreset(preset);
+          setDatePresetState("max");
           requestSearchForCurrentMode();
           return;
         }
@@ -2032,10 +2301,22 @@
           from.setHours(0, 0, 0, 0);
         } else if (preset === "24h") {
           from.setDate(from.getDate() - 1);
+        } else if (preset === "72h") {
+          from.setDate(from.getDate() - 3);
         } else if (preset === "7d") {
           from.setDate(from.getDate() - 7);
+        } else if (preset === "14d") {
+          from.setDate(from.getDate() - 14);
         } else if (preset === "30d") {
           from.setDate(from.getDate() - 30);
+        } else if (preset === "quarter") {
+          from.setDate(from.getDate() - 90);
+        } else if (preset === "year") {
+          from.setFullYear(from.getFullYear() - 1);
+        } else if (preset === "2y") {
+          from.setFullYear(from.getFullYear() - 2);
+        } else if (preset === "5y") {
+          from.setFullYear(from.getFullYear() - 5);
         } else {
           return;
         }
@@ -2046,7 +2327,7 @@
       }
 
       function setDatePresetState(preset) {
-        for (const button of els.datePresets.querySelectorAll("[data-date-preset]")) {
+        for (const button of document.querySelectorAll("[data-date-preset]")) {
           const selected = button.dataset.datePreset === preset;
           button.classList.toggle("is-selected", selected);
           button.setAttribute("aria-pressed", selected ? "true" : "false");
@@ -2055,10 +2336,14 @@
 
       function setGranularityForDatePreset(preset) {
         if (state.mode !== "overview") return;
-        if (preset === "24h") {
+        if (preset === "today" || preset === "24h" || preset === "72h") {
           els.granularity.value = "hour";
-        } else if ((preset === "7d" || preset === "30d") && els.granularity.value === "hour") {
+        } else if (preset === "7d" || preset === "14d" || preset === "30d") {
           els.granularity.value = "day";
+        } else if (preset === "quarter" || preset === "year") {
+          els.granularity.value = "week";
+        } else if (preset === "2y" || preset === "5y" || preset === "max") {
+          els.granularity.value = "month";
         }
       }
 
@@ -2079,7 +2364,7 @@
         const from = dateFromInput(els.dateFrom.value);
         const to = dateFromInput(els.dateTo.value);
         if (!from || !to) {
-          setDatePresetState("");
+          setDatePresetState(!from && !to ? "max" : "");
           return;
         }
         const minute = 60 * 1000;
@@ -2091,10 +2376,22 @@
           setDatePresetState("today");
         } else if (Math.abs(elapsed - 24 * 60 * minute) <= tolerance) {
           setDatePresetState("24h");
+        } else if (Math.abs(elapsed - 72 * 60 * minute) <= tolerance) {
+          setDatePresetState("72h");
         } else if (Math.abs(elapsed - 7 * 24 * 60 * minute) <= tolerance) {
           setDatePresetState("7d");
+        } else if (Math.abs(elapsed - 14 * 24 * 60 * minute) <= tolerance) {
+          setDatePresetState("14d");
         } else if (Math.abs(elapsed - 30 * 24 * 60 * minute) <= tolerance) {
           setDatePresetState("30d");
+        } else if (Math.abs(elapsed - 90 * 24 * 60 * minute) <= tolerance) {
+          setDatePresetState("quarter");
+        } else if (Math.abs(elapsed - 365 * 24 * 60 * minute) <= 2 * 24 * 60 * minute) {
+          setDatePresetState("year");
+        } else if (Math.abs(elapsed - 2 * 365 * 24 * 60 * minute) <= 4 * 24 * 60 * minute) {
+          setDatePresetState("2y");
+        } else if (Math.abs(elapsed - 5 * 365 * 24 * 60 * minute) <= 10 * 24 * 60 * minute) {
+          setDatePresetState("5y");
         } else {
           setDatePresetState("");
         }
@@ -2145,12 +2442,14 @@
       }
 
       function initAnalyticsControls() {
-        for (const select of [els.metric, els.dimension, els.granularity]) {
+        for (const select of [els.metric, els.granularity]) {
           select.addEventListener("change", () => {
             if (select === els.metric) syncAnalyticsDimensions();
             if (state.mode === "overview") {
               if (select === els.granularity) {
                 requestAnalyticsSearch({ panels: ["series"] });
+              } else if (select === els.metric) {
+                requestAnalyticsSearch({ panels: analyticsPanelsForCurrentQuery() });
               } else {
                 requestAnalyticsSearch({ panels: analyticsFocusPanels() });
               }
@@ -2163,15 +2462,7 @@
 
       function syncAnalyticsDimensions() {
         const model = analyticsMetricModels[els.metric.value] || "events";
-        const defaultDimension = analyticsDefaultDimensions[model];
-        let selectedStillValid = false;
-        for (const option of els.dimension.options) {
-          const enabled = !option.dataset.model || option.dataset.model === model;
-          option.disabled = !enabled;
-          option.hidden = !enabled;
-          if (enabled && option.value === els.dimension.value) selectedStillValid = true;
-        }
-        if (!selectedStillValid) els.dimension.value = defaultDimension;
+        els.dimension.value = analyticsDefaultDimensions[model] || "events.event_type";
       }
 
       function semanticFilters() {
@@ -2250,8 +2541,7 @@
       }
 
       function semanticFilterLabel(dimension) {
-        const option = Array.from(els.dimension.options).find((candidate) => candidate.value === dimension);
-        return option?.textContent || dimension;
+        return analyticsDimensionMeta[dimension]?.label || dimension;
       }
 
       function updateStepsFromControls() {
@@ -2296,6 +2586,7 @@
         state.section = mode === "overview" ? "analytics" : "replays";
         if (state.section === "replays") state.lastReplayMode = mode;
         syncSectionControls();
+        syncInspectorVisibility();
         renderSemanticFilters();
         for (const [key, button] of [
           ["sessions", els.sessionMode],
@@ -2322,12 +2613,15 @@
       function syncSectionControls() {
         const analyticsSelected = state.mode === "overview";
         state.section = analyticsSelected ? "analytics" : "replays";
+        els.app.classList.toggle("analytics-mode", analyticsSelected);
         els.replaySection.setAttribute("aria-selected", analyticsSelected ? "false" : "true");
         els.analyticsSection.setAttribute("aria-selected", analyticsSelected ? "true" : "false");
         els.resultsPane.classList.toggle("is-hidden", analyticsSelected);
         for (const field of document.querySelectorAll("[data-section]")) {
           field.classList.toggle("is-hidden", field.dataset.section !== state.section);
         }
+        window.requestAnimationFrame(schedulePlayerResize);
+        window.requestAnimationFrame(scheduleChartResize);
       }
 
       function formatTime(value) {
@@ -2608,8 +2902,7 @@
           state.mode = "overview";
           syncSectionControls();
           prepareAnalyticsShell(panels);
-          state.selectedSession = null;
-          state.sessionPayload = null;
+          clearReplayInspectorContext();
           renderResults();
           renderCharts(state.charts);
           renderChartContext();
@@ -2654,8 +2947,7 @@
         const body = await requestJson("/replay/api/sessions", paramsFromForm({ mode: "sessions" }));
         state.sessions = body.sessions || [];
         if (!options.keepSelection) {
-          state.selectedSession = null;
-          state.sessionPayload = null;
+          clearReplayInspectorContext();
         }
         renderResults();
         setStatus(`${state.sessions.length} sessions`, true);
@@ -2672,7 +2964,7 @@
         setStatus("loading");
         const body = await requestJson("/replay/api/events", paramsFromForm({ mode: "events" }));
         state.events = body.events || [];
-        state.selectedEvent = null;
+        clearReplayInspectorContext();
         renderResults();
         setStatus(`${state.events.length} events`, true);
         renderEventContext();
@@ -2682,7 +2974,7 @@
         setStatus("loading");
         const body = await requestJson("/replay/api/funnels", paramsFromForm({ mode: "funnels" }));
         state.funnels = body.sessions || [];
-        state.selectedFunnel = null;
+        clearReplayInspectorContext();
         renderResults();
         setStatus(`${state.funnels.length} funnel sessions`, true);
         renderFunnelContext(body);
@@ -2692,7 +2984,7 @@
         setStatus("loading");
         const body = await requestJson("/replay/api/friction", paramsFromForm({ mode: "friction" }));
         state.friction = body.sessions || [];
-        state.selectedFriction = null;
+        clearReplayInspectorContext();
         renderResults();
         setStatus(`${state.friction.length} flagged sessions`, true);
         renderFrictionContext();
@@ -2702,7 +2994,7 @@
         setStatus("loading");
         const body = await requestJson("/replay/api/person", paramsFromForm({ mode: "person" }));
         state.person = body;
-        state.selectedPersonItem = null;
+        clearReplayInspectorContext();
         renderResults();
         setStatus(`${(body.timeline || []).length} journey items`, true);
         renderPersonContext();
@@ -2820,10 +3112,10 @@
       }
 
       function analyticsFocusPanels() {
-        const panels = ["series", "focus_breakdown"];
+        const panels = ["series"];
         const visiblePanels = analyticsPanelsForCurrentQuery();
         for (const panel of visiblePanels) {
-          if (["summary", "series", "focus_breakdown"].includes(panel)) continue;
+          if (["summary", "series"].includes(panel)) continue;
           if (!state.charts?.breakdowns?.some((breakdown) => breakdown.panel_key === panel)) panels.push(panel);
         }
         return panels;
@@ -2837,18 +3129,19 @@
         }
         state.charts.focus = shell.focus;
         if (panels.includes("series")) state.charts.series = [];
-        if (panels.includes("focus_breakdown")) {
-          state.charts.breakdowns = (state.charts.breakdowns || []).filter(
-            (breakdown) => breakdown.panel_key !== "focus_breakdown",
-          );
-        }
+        const pendingBreakdowns = new Set(panels.filter((panel) => !["summary", "series"].includes(panel)));
+        state.charts.breakdowns = (state.charts.breakdowns || []).filter(
+          (breakdown) => !pendingBreakdowns.has(breakdown.panel_key || breakdownPanelKey(breakdown)),
+        );
       }
 
       function analyticsPanelsForCurrentQuery() {
         const focus = analyticsFocusFromCurrentForm();
-        const focusBuiltinPanel = analyticsBuiltInBreakdownPanels[focus.dimension];
+        const model = analyticsMetricModels[focus.metric] || "events";
+        const supportedPanels = analyticsLeaderboardDimensions[model] || {};
         return analyticsPanelOrder.filter((panel) => {
-          if (panel === focusBuiltinPanel) return false;
+          if (["summary", "series"].includes(panel)) return true;
+          if (!supportedPanels[panel]) return false;
           return true;
         });
       }
@@ -2879,20 +3172,11 @@
         if (panelIndex >= 0) return panelIndex;
         const key = `${breakdown?.model}.${breakdown?.dimension}`;
         const focus = state.charts?.focus || analyticsFocusFromCurrentForm();
+        const model = analyticsMetricModels[focus.metric] || "events";
         const selectedMetric = focus.metric;
         const selectedDimension = focus.dimension;
         if (breakdown?.metric === selectedMetric && key === selectedDimension) return 0;
-        const order = [
-          "events.event_type",
-          "pageviews.pathname",
-          "pageviews.host",
-          "pageviews.referrer_domain",
-          "pageviews.referrer",
-          "events.browser",
-          "events.geo_country_code",
-          "events.geo_region",
-          "events.geo_city",
-        ];
+        const order = Object.values(analyticsLeaderboardDimensions[model] || {});
         const index = order.indexOf(key);
         return index < 0 ? order.length + 1 : index + 1;
       }
@@ -2911,13 +3195,254 @@
 
         const wrap = document.createElement("div");
         wrap.className = "chart-overview";
-        wrap.append(renderMetricGrid(charts?.summary || [], charts?.focus?.metric));
+        wrap.append(renderAnalyticsToolbar());
+        wrap.append(renderMetricGrid(charts?.summary || []));
         wrap.append(renderSeriesPanel(charts));
         wrap.append(renderBreakdownGrid(charts?.breakdowns || []));
         els.player.appendChild(wrap);
       }
 
-      function renderMetricGrid(metrics, selectedMetricRef = "") {
+      function renderAnalyticsToolbar() {
+        const bar = document.createElement("section");
+        bar.className = "analytics-control-bar";
+        bar.setAttribute("aria-label", "Analytics controls");
+
+        const left = document.createElement("div");
+        left.className = "analytics-control-left";
+        left.append(renderAnalyticsFilterMenu(), renderAnalyticsActiveFilters());
+
+        const right = document.createElement("div");
+        right.className = "analytics-control-right";
+        right.append(renderAnalyticsDateMenu());
+        bar.append(left, right);
+        return bar;
+      }
+
+      function renderAnalyticsFilterMenu() {
+        const menu = document.createElement("details");
+        menu.className = "analytics-filter-menu";
+
+        const trigger = document.createElement("summary");
+        trigger.className = "analytics-filter-trigger";
+        trigger.setAttribute("aria-label", "Filters");
+        trigger.innerHTML = `
+          <span class="sr-only">Filters</span>
+          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 5h18" />
+            <path d="M6 12h12" />
+            <path d="M10 19h4" />
+          </svg>
+        `;
+
+        const popover = document.createElement("div");
+        popover.className = "analytics-filter-popover";
+
+        const metricLabel = document.createElement("label");
+        metricLabel.innerHTML = '<span class="label">Metric</span>';
+        const metricSelect = els.metric.cloneNode(true);
+        metricSelect.removeAttribute("id");
+        metricSelect.removeAttribute("name");
+        metricSelect.value = els.metric.value;
+        metricSelect.addEventListener("change", () => {
+          els.metric.value = metricSelect.value;
+          syncAnalyticsDimensions();
+          requestAnalyticsSearch({ panels: analyticsPanelsForCurrentQuery() });
+        });
+        metricLabel.appendChild(metricSelect);
+
+        const urlLabel = document.createElement("label");
+        urlLabel.innerHTML = '<span class="label">URL contains</span>';
+        const urlInput = document.createElement("input");
+        urlInput.type = "text";
+        urlInput.value = els.url.value;
+        urlInput.placeholder = "/checkout";
+        bindAnalyticsTextFilter(urlInput, els.url);
+        urlLabel.appendChild(urlInput);
+
+        const eventLabel = document.createElement("label");
+        eventLabel.innerHTML = '<span class="label">Event name</span>';
+        const eventInput = document.createElement("input");
+        eventInput.type = "text";
+        eventInput.value = els.eventName.value;
+        eventInput.placeholder = "Product Viewed";
+        bindAnalyticsTextFilter(eventInput, els.eventName);
+        eventLabel.appendChild(eventInput);
+
+        popover.append(metricLabel, urlLabel, eventLabel);
+        menu.append(trigger, popover);
+        return menu;
+      }
+
+      function bindAnalyticsTextFilter(toolbarInput, sourceInput) {
+        const commit = () => {
+          const next = toolbarInput.value.trim();
+          if (sourceInput.value.trim() === next) return;
+          sourceInput.value = next;
+          requestAnalyticsSearch();
+        };
+        toolbarInput.addEventListener("change", commit);
+        toolbarInput.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          commit();
+        });
+      }
+
+      function renderAnalyticsDateMenu() {
+        const menu = document.createElement("details");
+        menu.className = "analytics-date-menu";
+
+        const trigger = document.createElement("summary");
+        trigger.className = "analytics-date-trigger";
+        trigger.setAttribute("aria-label", "Date range");
+        const triggerLabel = document.createElement("span");
+        triggerLabel.textContent = analyticsDateRangeText();
+        trigger.appendChild(triggerLabel);
+        trigger.insertAdjacentHTML(
+          "beforeend",
+          '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg>',
+        );
+
+        const popover = document.createElement("div");
+        popover.className = "analytics-date-popover";
+
+        const presets = document.createElement("div");
+        presets.className = "analytics-date-presets";
+        const selectedPreset = selectedDatePreset();
+        for (const preset of datePresetOptions) {
+          const button = document.createElement("button");
+          const selected = preset.key === selectedPreset;
+          button.className = "preset-button analytics-date-option";
+          button.type = "button";
+          button.dataset.datePreset = preset.key;
+          button.textContent = preset.label;
+          button.setAttribute("aria-label", preset.label);
+          button.setAttribute("aria-pressed", selected ? "true" : "false");
+          button.classList.toggle("is-selected", selected);
+          button.addEventListener("click", () => {
+            menu.open = false;
+            applyDatePreset(preset.key);
+          });
+          presets.appendChild(button);
+        }
+
+        const custom = document.createElement("div");
+        custom.className = "analytics-custom-range";
+        const fromLabel = document.createElement("label");
+        fromLabel.innerHTML = '<span class="label">From</span>';
+        const fromInput = document.createElement("input");
+        fromInput.type = "datetime-local";
+        fromInput.step = "60";
+        fromInput.value = els.dateFrom.value;
+        fromLabel.appendChild(fromInput);
+
+        const toLabel = document.createElement("label");
+        toLabel.innerHTML = '<span class="label">To</span>';
+        const toInput = document.createElement("input");
+        toInput.type = "datetime-local";
+        toInput.step = "60";
+        toInput.value = els.dateTo.value;
+        toLabel.appendChild(toInput);
+
+        const grainLabel = document.createElement("label");
+        grainLabel.innerHTML = '<span class="label">Date grain</span>';
+        const grain = els.granularity.cloneNode(true);
+        grain.removeAttribute("id");
+        grain.removeAttribute("name");
+        grain.className = "analytics-grain-select";
+        grain.setAttribute("aria-label", "Date grain");
+        grain.value = els.granularity.value;
+        grain.addEventListener("change", () => {
+          els.granularity.value = grain.value;
+          requestAnalyticsSearch({ panels: ["series"] });
+        });
+        grainLabel.appendChild(grain);
+
+        const actions = document.createElement("div");
+        actions.className = "analytics-date-actions";
+        const apply = document.createElement("button");
+        apply.className = "button secondary";
+        apply.type = "button";
+        apply.textContent = "Apply range";
+        apply.addEventListener("click", () => {
+          els.dateFrom.value = fromInput.value;
+          els.dateTo.value = toInput.value;
+          syncDatePresetFromInputs();
+          menu.open = false;
+          requestAnalyticsSearch();
+        });
+        actions.appendChild(apply);
+
+        custom.append(fromLabel, toLabel, grainLabel, actions);
+        popover.append(presets, custom);
+        menu.append(trigger, popover);
+        return menu;
+      }
+
+      function renderAnalyticsActiveFilters() {
+        const wrap = document.createElement("div");
+        wrap.className = "analytics-active-filters";
+        const active = [];
+        if (els.url.value.trim()) {
+          active.push({
+            label: `URL: ${els.url.value.trim()}`,
+            remove: () => {
+              els.url.value = "";
+              requestAnalyticsSearch();
+            },
+          });
+        }
+        if (els.eventName.value.trim()) {
+          active.push({
+            label: `Event: ${els.eventName.value.trim()}`,
+            remove: () => {
+              els.eventName.value = "";
+              requestAnalyticsSearch();
+            },
+          });
+        }
+        for (const item of semanticFilterEntries()) {
+          active.push({
+            label: `${semanticFilterLabel(item.dimension)}: ${item.value}`,
+            remove: () => removeSemanticFilter(item.dimension, item.value),
+          });
+        }
+        for (const item of active) {
+          const pill = document.createElement("span");
+          pill.className = "semantic-filter-pill";
+          const label = document.createElement("span");
+          label.textContent = item.label;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "×";
+          button.setAttribute("aria-label", `Remove ${item.label}`);
+          button.addEventListener("click", item.remove);
+          pill.append(label, button);
+          wrap.appendChild(pill);
+        }
+        return wrap;
+      }
+
+      function selectedDatePreset() {
+        return document.querySelector("[data-date-preset].is-selected")?.dataset.datePreset || "";
+      }
+
+      function analyticsDateRangeText() {
+        const preset = datePresetOptions.find((item) => item.key === selectedDatePreset());
+        if (preset) return preset.shortLabel;
+        const from = dateFromInput(els.dateFrom.value);
+        const to = dateFromInput(els.dateTo.value);
+        if (!from && !to) return "Max";
+        if (from && to) return `${formatShortDate(from)} - ${formatShortDate(to)}`;
+        if (from) return `From ${formatShortDate(from)}`;
+        return `Until ${formatShortDate(to)}`;
+      }
+
+      function formatShortDate(date) {
+        return new Intl.DateTimeFormat(undefined, { month: "numeric", day: "numeric" }).format(date);
+      }
+
+      function renderMetricGrid(metrics) {
         const grid = document.createElement("section");
         grid.className = "metric-grid";
         grid.setAttribute("aria-label", "Analytics metrics");
@@ -2925,7 +3450,7 @@
         grid.classList.toggle("is-pending", pending);
         if (!metrics.length) {
           if (pending) {
-            for (let index = 0; index < 6; index += 1) {
+            for (let index = 0; index < 5; index += 1) {
               grid.appendChild(renderMetricSkeletonCard(index));
             }
           } else {
@@ -2940,8 +3465,20 @@
           const card = document.createElement("div");
           card.className = "metric-card";
           card.dataset.metric = metric.semantic_ref;
-          card.classList.toggle("is-selected", metric.semantic_ref === selectedMetricRef);
-          if (metric.semantic_ref === selectedMetricRef) card.setAttribute("aria-current", "true");
+          const selectable = Boolean(analyticsMetricModels[metric.semantic_ref]);
+          card.classList.toggle("is-selectable", selectable);
+          card.classList.toggle("is-selected", metric.semantic_ref === chartsFocusMetric());
+          if (selectable) {
+            card.setAttribute("role", "button");
+            card.setAttribute("tabindex", "0");
+            if (metric.semantic_ref === chartsFocusMetric()) card.setAttribute("aria-current", "true");
+            card.addEventListener("click", () => selectAnalyticsMetric(metric.semantic_ref));
+            card.addEventListener("keydown", (event) => {
+              if (event.key !== "Enter" && event.key !== " ") return;
+              event.preventDefault();
+              selectAnalyticsMetric(metric.semantic_ref);
+            });
+          }
           const label = document.createElement("span");
           label.textContent = metric.label;
           const value = document.createElement("strong");
@@ -2952,6 +3489,10 @@
           grid.appendChild(card);
         }
         return grid;
+      }
+
+      function chartsFocusMetric() {
+        return state.charts?.focus?.metric || analyticsFocusFromCurrentForm().metric;
       }
 
       function renderMetricSkeletonCard(index) {
@@ -3082,26 +3623,15 @@
 
       function breakdownPanelKey(breakdown) {
         const key = `${breakdown?.model}.${breakdown?.dimension}`;
-        const focus = state.charts?.focus || analyticsFocusFromCurrentForm();
-        if (breakdown?.metric === focus.metric && key === focus.dimension) return "focus_breakdown";
         return analyticsBuiltInBreakdownPanels[key] || key;
       }
 
       function loadingBreakdownTitle(panel) {
         const focus = state.charts?.focus || analyticsFocusFromCurrentForm();
-        const titles = {
-          focus_breakdown: `${analyticsMetricLabel(focus.metric)} by ${analyticsDimensionLabel(focus.dimension)}`,
-          top_events: "Events by Event",
-          top_pages: "Pageviews by Page",
-          domains: "Pageviews by Domain",
-          referring_domains: "Pageviews by Referring domain",
-          referrers: "Pageviews by Referrer",
-          browsers: "Events by Browser",
-          countries: "Events by Country",
-          regions: "Events by Region",
-          cities: "Events by City",
-        };
-        return titles[panel] || "Breakdown";
+        const model = analyticsMetricModels[focus.metric] || "events";
+        const dimension = analyticsLeaderboardDimensions[model]?.[panel];
+        if (!dimension) return "Panel";
+        return analyticsDimensionTitle(dimension);
       }
 
       function renderBreakdownRow(row, breakdown) {
@@ -3273,16 +3803,20 @@
       }
 
       function analyticsFocusFromCurrentForm() {
+        const metric = analyticsMetricModels[els.metric.value] ? els.metric.value : "events.event_count";
         return {
-          metric: els.metric.value || "events.event_count",
+          metric,
           dimension: els.dimension.value || "events.event_type",
           granularity: els.granularity.value || "day",
         };
       }
 
       function analyticsFocusFromParams(params) {
+        const metric = analyticsMetricModels[params.get("metric")]
+          ? params.get("metric")
+          : els.metric.value || "events.event_count";
         return {
-          metric: params.get("metric") || els.metric.value || "events.event_count",
+          metric,
           dimension: params.get("dimension") || els.dimension.value || "events.event_type",
           granularity: params.get("granularity") || els.granularity.value || "day",
         };
@@ -3299,27 +3833,11 @@
       }
 
       function analyticsDimensionLabel(dimensionRef) {
-        return selectedOptionLabel(els.dimension, dimensionRef);
+        return analyticsDimensionMeta[dimensionRef]?.label || dimensionRef;
       }
 
       function analyticsDimensionTitle(dimensionRef) {
-        const titles = {
-          "events.event_type": "Events",
-          "events.browser": "Browsers",
-          "events.geo_country_code": "Countries",
-          "events.geo_region": "Regions",
-          "events.geo_city": "Cities",
-          "pageviews.pathname": "Pages",
-          "pageviews.host": "Domains",
-          "pageviews.referrer_domain": "Referring domains",
-          "pageviews.referrer": "Referrers",
-          "sessions.landing_path": "Landing paths",
-          "sessions.browser": "Session browsers",
-          "sessions.geo_country_code": "Session countries",
-          "sessions.geo_region": "Session regions",
-          "sessions.geo_city": "Session cities",
-        };
-        return titles[dimensionRef] || analyticsDimensionLabel(dimensionRef);
+        return analyticsDimensionMeta[dimensionRef]?.title || analyticsDimensionLabel(dimensionRef);
       }
 
       function semanticFilterEntries() {
@@ -3342,7 +3860,6 @@
         const filters = semanticFilterSummary();
         const pieces = [
           analyticsMetricLabel(focus.metric),
-          `Breakdown: ${analyticsDimensionLabel(focus.dimension)}`,
           `${grainLabel(focus.granularity)} trend`,
         ];
         if (filters !== "No filters") pieces.push(filters);
@@ -3362,18 +3879,11 @@
         els.detailEvents.textContent = session ? String(session.event_count) : "-";
         els.detailChunks.textContent = session ? String(session.chunk_count) : "-";
         els.detailUrl.textContent = session?.first_url || "-";
+        syncInspectorVisibility();
       }
 
       function renderAnalyticsFacts(charts) {
-        const focus = charts?.focus || analyticsFocusFromCurrentForm();
-        els.inspectorTitle.textContent = "Analytics inspector";
-        setFactLabels("Metric", "Breakdown", "Trend", "Rows", "Engine", "State");
-        els.detailDistinct.textContent = analyticsMetricLabel(focus.metric);
-        els.detailSecondary.textContent = analyticsDimensionLabel(focus.dimension);
-        els.detailDuration.textContent = grainLabel(focus.granularity);
-        els.detailEvents.textContent = String(analyticsBreakdownLimit);
-        els.detailChunks.textContent = "Sidemantic";
-        els.detailUrl.textContent = state.analyticsLoading ? "Updating" : "Ready";
+        syncInspectorVisibility();
       }
 
       function setFactLabels(user, secondary, duration, events, chunks, url) {
@@ -3760,6 +4270,37 @@
         window.requestAnimationFrame(scheduleChartResize);
       }
 
+      function replayHasInspectorContext() {
+        return Boolean(
+          state.selectedSession ||
+            state.selectedEvent ||
+            state.selectedFunnel ||
+            state.selectedFriction ||
+            state.selectedPersonItem ||
+            state.sessionPayload,
+        );
+      }
+
+      function clearReplayInspectorContext() {
+        state.selectedSession = null;
+        state.selectedEvent = null;
+        state.selectedFunnel = null;
+        state.selectedFriction = null;
+        state.selectedPersonItem = null;
+        state.sessionPayload = null;
+        syncInspectorVisibility();
+      }
+
+      function syncInspectorVisibility() {
+        const unavailable = state.section === "analytics" || !replayHasInspectorContext();
+        els.app.classList.toggle("inspector-unavailable", unavailable);
+        if (unavailable) {
+          setInspectorCollapsed(true);
+          return;
+        }
+        setInspectorCollapsed(state.userInspectorCollapsed === true);
+      }
+
       function setDebugPayload() {
         els.debugPayload.textContent = JSON.stringify(
           {
@@ -3823,9 +4364,14 @@
       els.personMode.addEventListener("click", () => switchMode("person"));
       els.reload.addEventListener("click", requestSearchForCurrentMode);
       els.toggleRail.addEventListener("click", () => setRailCollapsed(!state.railCollapsed));
-      els.toggleInspector.addEventListener("click", () =>
-        setInspectorCollapsed(!state.inspectorCollapsed),
-      );
+      els.toggleInspector.addEventListener("click", () => {
+        if (state.section === "analytics" || !replayHasInspectorContext()) {
+          setInspectorCollapsed(true);
+          return;
+        }
+        state.userInspectorCollapsed = !state.inspectorCollapsed;
+        setInspectorCollapsed(state.userInspectorCollapsed);
+      });
       els.datePresets.addEventListener("click", (event) => {
         const button = event.target.closest("[data-date-preset]");
         if (!button) return;
@@ -3851,12 +4397,7 @@
         state.funnels = [];
         state.friction = [];
         state.person = null;
-        state.selectedSession = null;
-        state.selectedEvent = null;
-        state.selectedFunnel = null;
-        state.selectedFriction = null;
-        state.selectedPersonItem = null;
-        state.sessionPayload = null;
+        clearReplayInspectorContext();
         if (wasAnalytics) {
           ensureDefaultAnalyticsDateRange();
           requestAnalyticsSearch();
@@ -3877,6 +4418,13 @@
           location.pathname.replace(/\/$/, "") === analyticsPath ||
           params.get("section") === "analytics";
         const bootingReplay = location.pathname.replace(/\/$/, "") === replayPath;
+        const metricParam = params.get("metric");
+        if (bootingAnalytics && metricParam && !analyticsMetricModels[metricParam]) {
+          setMode("overview");
+          setStatus("error");
+          showMessage("error", "Analytics unavailable", `Unsupported analytics metric: ${metricParam}`);
+          return;
+        }
         for (const [key, value] of params.entries()) {
           if (key === "at_ms" || key === "mode" || key === "section") continue;
           setField(key, value);
