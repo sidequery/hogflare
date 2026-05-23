@@ -71,7 +71,7 @@ flowchart TB
     EventsPipeline --> EventsR2["R2 Data Catalog<br/>events table"]
     PersonsPipeline --> PersonsR2["R2 Data Catalog<br/>persons table"]
 
-    ReplayUI["Replay Explorer"] -->|"R2 SQL"| EventsR2
+    WebUI["Hogflare UI"] -->|"R2 SQL"| EventsR2
     Models["Semantic Models<br/>models/*.yml"] --> EventsR2
     Models --> PersonsR2
     Consumers["DuckDB / R2 SQL / BI"] --> Models
