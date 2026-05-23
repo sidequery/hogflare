@@ -35,7 +35,7 @@ regex = "1"
 axum = { version = "0.7", default-features = false, features = ["json", "query", "tokio", "http1"] }
 dotenvy = "0.15"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "process", "net", "time"] }
+tokio = { version = "1.37", features = ["macros", "rt-multi-thread", "process", "net", "time", "io-util", "sync"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [dev-dependencies]

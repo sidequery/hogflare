@@ -7,7 +7,9 @@ pub mod importer;
 pub mod models;
 pub mod persons;
 pub mod pipeline;
+pub mod product_analytics;
 pub mod replay;
+pub mod ui;
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -34,6 +36,7 @@ use persons::{
     NoopPersonStore, PersonAlias, PersonError, PersonStore, PersonUpdate,
 };
 use pipeline::{PersonPipelineRecord, PipelineClient, PipelineError, PipelineEvent};
+use product_analytics::{ProductAnalyticsClient, ProductAnalyticsError, ProductAnalyticsQuery};
 use replay::{
     ReplayClient, ReplayError, ReplayEventsQuery, ReplayFrictionQuery, ReplayFunnelQuery,
     ReplayPersonQuery, ReplaySessionEventsQuery, ReplaySessionsQuery,
@@ -63,6 +66,7 @@ pub(crate) struct AppState {
     pub(crate) pipeline: Arc<PipelineClient>,
     pub(crate) persons_pipeline: Option<Arc<PipelineClient>>,
     pub(crate) replay: Option<Arc<ReplayClient>>,
+    pub(crate) analytics: Option<Arc<ProductAnalyticsClient>>,
     pub(crate) posthog_team_id: Option<i64>,
     pub(crate) decide_api_token: Option<String>,
     pub(crate) session_recording_endpoint: Option<String>,
@@ -180,6 +184,11 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
         .map(ReplayClient::new)
         .transpose()?
         .map(Arc::new);
+    let analytics = config
+        .analytics
+        .clone()
+        .map(ProductAnalyticsClient::new)
+        .map(Arc::new);
 
     info!(
         endpoint = %config.pipeline_endpoint,
@@ -199,19 +208,23 @@ pub async fn run_with_config(config: Config) -> Result<(), RunError> {
     let listener = TcpListener::bind(config.address).await?;
     info!(address = %config.address, "listening for requests");
 
-    serve_with_person_pipeline_and_replay(
+    serve_with_state(
         listener,
-        Arc::new(pipeline),
-        persons_pipeline,
-        replay,
-        config.posthog_team_id,
-        Arc::new(NoopGroupStore),
-        GroupTypeMap::new(config.posthog_group_types.clone()),
-        config.posthog_project_api_key.clone(),
-        config.session_recording_endpoint.clone(),
-        config.posthog_signing_secret.clone(),
-        config.person_debug_token.clone(),
-        Arc::new(config.feature_flags),
+        build_state(
+            Arc::new(pipeline),
+            persons_pipeline,
+            replay,
+            analytics,
+            config.posthog_team_id,
+            Arc::new(NoopGroupStore),
+            GroupTypeMap::new(config.posthog_group_types.clone()),
+            config.posthog_project_api_key.clone(),
+            config.session_recording_endpoint.clone(),
+            config.posthog_signing_secret.clone(),
+            config.person_debug_token.clone(),
+            Arc::new(config.feature_flags),
+            Arc::new(persons::MemoryPersonStore::new(config.posthog_team_id)),
+        ),
     )
     .await
 }
@@ -286,11 +299,17 @@ pub async fn fetch(
         },
         None => None,
     };
+    let analytics = config
+        .analytics
+        .clone()
+        .map(ProductAnalyticsClient::new)
+        .map(Arc::new);
 
-    let mut router = build_router_with_person_pipeline_and_replay(
+    let mut router = router(build_state(
         Arc::new(pipeline),
         persons_pipeline,
         replay,
+        analytics,
         config.posthog_team_id,
         group_store,
         group_type_map,
@@ -300,7 +319,7 @@ pub async fn fetch(
         config.person_debug_token.clone(),
         feature_flags,
         person_store,
-    );
+    ));
 
     Ok(router.call(req).await?)
 }
@@ -394,6 +413,7 @@ pub fn build_router_with_person_pipeline_and_replay(
         pipeline,
         persons_pipeline,
         replay,
+        None,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -412,6 +432,7 @@ pub async fn serve(listener: TcpListener, pipeline: Arc<PipelineClient>) -> Resu
         listener,
         build_state(
             pipeline,
+            None,
             None,
             None,
             None,
@@ -507,6 +528,7 @@ pub async fn serve_with_person_pipeline_and_replay(
         pipeline,
         persons_pipeline,
         replay,
+        None,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -522,6 +544,7 @@ pub async fn serve_with_person_pipeline_and_replay(
 
 fn router(state: AppState) -> Router {
     let router = Router::new()
+        .route("/", get(app_ui))
         .route("/capture", post(capture))
         .route("/e", post(browser_capture))
         .route("/e/", post(browser_capture))
@@ -538,8 +561,11 @@ fn router(state: AppState) -> Router {
         .route("/array/:token/config.js", get(array_config_js))
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
-        .route("/replay", get(replay_ui))
-        .route("/replay/", get(replay_ui))
+        .route("/analytics", get(app_ui))
+        .route("/analytics/", get(app_ui))
+        .route("/analytics/api/charts", get(product_analytics))
+        .route("/replay", get(app_ui))
+        .route("/replay/", get(app_ui))
         .route("/replay/api/sessions", get(replay_sessions))
         .route("/replay/api/events", get(replay_events))
         .route("/replay/api/funnels", get(replay_funnels))
@@ -567,6 +593,7 @@ fn build_state(
     pipeline: Arc<PipelineClient>,
     persons_pipeline: Option<Arc<PipelineClient>>,
     replay: Option<Arc<ReplayClient>>,
+    analytics: Option<Arc<ProductAnalyticsClient>>,
     posthog_team_id: Option<i64>,
     group_store: Arc<dyn GroupStore>,
     group_type_map: GroupTypeMap,
@@ -581,6 +608,7 @@ fn build_state(
         pipeline,
         persons_pipeline,
         replay,
+        analytics,
         posthog_team_id,
         group_store,
         group_type_map,
@@ -1727,8 +1755,8 @@ async fn health() -> impl IntoResponse {
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
-async fn replay_ui() -> impl IntoResponse {
-    Html(replay::replay_ui_html())
+async fn app_ui() -> impl IntoResponse {
+    Html(ui::app_html())
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
@@ -1743,6 +1771,21 @@ async fn replay_sessions(
     match client.list_sessions(query).await {
         Ok(response) => Json(response).into_response(),
         Err(err) => replay_error_response(err),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn product_analytics(
+    State(state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<ProductAnalyticsQuery>,
+) -> impl IntoResponse {
+    let Some(client) = state.analytics.as_ref() else {
+        return product_analytics_error_response(ProductAnalyticsError::NotConfigured);
+    };
+
+    match client.query(query).await {
+        Ok(response) => Json(response).into_response(),
+        Err(err) => product_analytics_error_response(err),
     }
 }
 
@@ -1841,6 +1884,33 @@ fn replay_error_response(err: ReplayError) -> axum::response::Response {
 
     if status.is_server_error() {
         error!(error = %err, "replay request failed");
+    }
+
+    (
+        status,
+        Json(ErrorResponse {
+            status: 0,
+            error: err.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+fn product_analytics_error_response(err: ProductAnalyticsError) -> axum::response::Response {
+    let status = match &err {
+        ProductAnalyticsError::NotConfigured => StatusCode::SERVICE_UNAVAILABLE,
+        ProductAnalyticsError::Serialize(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        ProductAnalyticsError::Failed(_) | ProductAnalyticsError::InvalidResponse(_) => {
+            StatusCode::BAD_GATEWAY
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        ProductAnalyticsError::Process(_) => StatusCode::BAD_GATEWAY,
+        #[cfg(target_arch = "wasm32")]
+        ProductAnalyticsError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+    };
+
+    if status.is_server_error() {
+        error!(error = %err, "analytics request failed");
     }
 
     (

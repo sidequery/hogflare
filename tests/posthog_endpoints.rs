@@ -932,13 +932,17 @@ async fn replay_ui_lists_and_loads_session_events() -> Result<(), Box<dyn std::e
     let ui_response = client.get(format!("{}/replay", base_url)).send().await?;
     assert!(ui_response.status().is_success());
     let ui = ui_response.text().await?;
-    assert!(ui.contains("Replay Explorer"));
+    assert!(ui.contains("<title>Hogflare</title>"));
     assert!(ui.contains("aria-label=\"Hogflare\""));
     assert!(ui.contains("id=\"status\" hidden"));
     assert!(ui.contains("Activity timeline"));
     assert!(ui.contains("Date range"));
     assert!(ui.contains("type=\"datetime-local\""));
     assert!(ui.contains("data-date-preset=\"24h\""));
+    assert!(ui.contains("data-date-preset=\"30d\" aria-pressed=\"true\""));
+    assert!(ui.contains("<option value=\"hour\">Hour</option>"));
+    assert!(ui.contains("id=\"clear\" type=\"button\" data-section=\"replays\""));
+    assert!(!ui.contains(">Reset<"));
     assert!(ui.contains("aria-label=\"Hide filters\""));
     assert!(ui.contains("aria-label=\"Hide context\""));
     assert!(ui.contains(">Search<"));

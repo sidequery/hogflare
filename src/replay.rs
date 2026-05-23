@@ -81,7 +81,7 @@ pub enum ReplayConfigError {
     InvalidQueryLimit { value: String, message: String },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ReplayClient {
     config: ReplayConfig,
     #[cfg(not(target_arch = "wasm32"))]
@@ -696,7 +696,7 @@ pub struct ReplayActivityItem {
 
 #[derive(Debug, Serialize)]
 pub struct ReplayEventsResponse {
-    pub events: Vec<ReplayAnalyticsEvent>,
+    pub events: Vec<ReplayEventSummary>,
 }
 
 #[derive(Debug, Serialize)]
@@ -768,7 +768,7 @@ pub struct ReplayPersonJourneyResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub distinct_id: Option<String>,
     pub sessions: Vec<ReplaySessionSummary>,
-    pub events: Vec<ReplayAnalyticsEvent>,
+    pub events: Vec<ReplayEventSummary>,
     pub timeline: Vec<ReplayPersonTimelineItem>,
 }
 
@@ -786,7 +786,7 @@ pub struct ReplayPersonTimelineItem {
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
-pub struct ReplayAnalyticsEvent {
+pub struct ReplayEventSummary {
     pub uuid: String,
     pub event: String,
     pub distinct_id: String,
@@ -1043,7 +1043,7 @@ pub fn build_session_events_response(
 pub fn build_events_response(rows: Vec<ReplayEventRow>, limit: usize) -> ReplayEventsResponse {
     let mut events = rows
         .into_iter()
-        .map(ReplayAnalyticsEvent::from)
+        .map(ReplayEventSummary::from)
         .collect::<Vec<_>>();
     events.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     events.truncate(limit);
@@ -1062,9 +1062,9 @@ pub fn build_funnel_response(
         };
     }
 
-    let mut grouped: HashMap<String, Vec<ReplayAnalyticsEvent>> = HashMap::new();
+    let mut grouped: HashMap<String, Vec<ReplayEventSummary>> = HashMap::new();
     for row in rows {
-        let event = ReplayAnalyticsEvent::from(row);
+        let event = ReplayEventSummary::from(row);
         let key = event
             .session_id
             .clone()
@@ -1133,7 +1133,7 @@ pub fn build_friction_response(
 pub fn build_person_journey_response(
     distinct_id: Option<String>,
     sessions: Vec<ReplaySessionSummary>,
-    events: Vec<ReplayAnalyticsEvent>,
+    events: Vec<ReplayEventSummary>,
     limit: usize,
 ) -> ReplayPersonJourneyResponse {
     let mut timeline = Vec::new();
@@ -1204,11 +1204,7 @@ pub fn rows_from_r2_sql_response(value: Value) -> Result<Vec<Value>, ReplayError
     Err(ReplayError::MissingRows)
 }
 
-pub fn replay_ui_html() -> &'static str {
-    include_str!("replay_ui.html")
-}
-
-impl From<ReplayEventRow> for ReplayAnalyticsEvent {
+impl From<ReplayEventRow> for ReplayEventSummary {
     fn from(row: ReplayEventRow) -> Self {
         let session_id = session_id_from_value(&row.properties);
         let url = event_url_from_properties(&row.properties);
@@ -1229,7 +1225,7 @@ impl From<ReplayEventRow> for ReplayAnalyticsEvent {
 }
 
 fn funnel_session_from_events(
-    events: &[ReplayAnalyticsEvent],
+    events: &[ReplayEventSummary],
     steps: &[String],
 ) -> Option<ReplayFunnelSession> {
     let first = events.first()?;
@@ -1633,7 +1629,7 @@ fn current_url_at(events: &[Value], timestamp: i64) -> Option<String> {
         .last()
 }
 
-fn event_property_line(event: &ReplayAnalyticsEvent) -> String {
+fn event_property_line(event: &ReplayEventSummary) -> String {
     if event.properties.is_empty() {
         return event
             .url
@@ -2302,7 +2298,7 @@ mod tests {
         }
     }
 
-    fn analytics_row(
+    fn event_row(
         uuid: &str,
         event: &str,
         session_id: &str,
@@ -2475,7 +2471,7 @@ mod tests {
     }
 
     #[test]
-    fn builds_analytics_event_response_without_raw_properties() {
+    fn builds_event_response_without_raw_properties() {
         let response = build_events_response(
             vec![ReplayEventRow {
                 uuid: "event-1".to_string(),
@@ -2513,13 +2509,13 @@ mod tests {
     fn classifies_funnel_sessions() {
         let response = build_funnel_response(
             vec![
-                analytics_row("a1", "Viewed Pricing", "converted", "user-a", 1_000),
-                analytics_row("a2", "Checkout Started", "converted", "user-a", 2_000),
-                analytics_row("a3", "Paid", "converted", "user-a", 3_000),
-                analytics_row("b1", "Viewed Pricing", "stuck", "user-b", 4_000),
-                analytics_row("b2", "Viewed Pricing", "stuck", "user-b", 5_000),
-                analytics_row("c1", "Viewed Pricing", "dropped", "user-c", 6_000),
-                analytics_row("d1", "Signed Up", "ignored", "user-d", 7_000),
+                event_row("a1", "Viewed Pricing", "converted", "user-a", 1_000),
+                event_row("a2", "Checkout Started", "converted", "user-a", 2_000),
+                event_row("a3", "Paid", "converted", "user-a", 3_000),
+                event_row("b1", "Viewed Pricing", "stuck", "user-b", 4_000),
+                event_row("b2", "Viewed Pricing", "stuck", "user-b", 5_000),
+                event_row("c1", "Viewed Pricing", "dropped", "user-c", 6_000),
+                event_row("d1", "Signed Up", "ignored", "user-d", 7_000),
             ],
             vec![
                 "Viewed Pricing".to_string(),
