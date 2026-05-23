@@ -1048,13 +1048,16 @@
       }
 
       .breakdown-grid .chart-panel {
-        border-top: 1px solid var(--line);
         border-bottom: 0;
         background: var(--surface);
       }
 
       .breakdown-grid .chart-panel:first-child {
         grid-column: span 2;
+      }
+
+      .breakdown-grid .chart-panel:nth-child(n + 3) {
+        border-top: 1px solid var(--line);
       }
 
       .breakdown-grid .chart-panel:nth-child(2),
@@ -1064,6 +1067,10 @@
       .breakdown-grid .chart-panel:nth-child(8),
       .breakdown-grid .chart-panel:nth-child(10) {
         border-left: 1px solid var(--line);
+      }
+
+      .breakdown-grid .chart-panel:nth-child(9) {
+        border-right: 1px solid var(--line);
       }
 
       .breakdown-row {
@@ -1342,6 +1349,10 @@
           grid-column: span 1;
         }
 
+        .breakdown-grid .chart-panel:nth-child(n + 2) {
+          border-top: 1px solid var(--line);
+        }
+
         .breakdown-grid .chart-panel:nth-child(2),
         .breakdown-grid .chart-panel:nth-child(4),
         .breakdown-grid .chart-panel:nth-child(5),
@@ -1349,6 +1360,10 @@
         .breakdown-grid .chart-panel:nth-child(8),
         .breakdown-grid .chart-panel:nth-child(10) {
           border-left: 0;
+        }
+
+        .breakdown-grid .chart-panel:nth-child(9) {
+          border-right: 0;
         }
       }
     </style>
