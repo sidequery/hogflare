@@ -1050,6 +1050,7 @@
       .breakdown-grid .chart-panel {
         border-bottom: 0;
         background: var(--surface);
+        overflow: visible;
       }
 
       .breakdown-grid .chart-panel:first-child {
@@ -1071,6 +1072,17 @@
 
       .breakdown-grid .chart-panel:nth-child(9) {
         border-right: 1px solid var(--line);
+      }
+
+      .breakdown-grid .chart-panel:nth-child(9)::before {
+        position: absolute;
+        top: -1px;
+        left: 100%;
+        width: 200%;
+        height: 1px;
+        background: var(--line);
+        content: "";
+        pointer-events: none;
       }
 
       .breakdown-row {
@@ -1364,6 +1376,10 @@
 
         .breakdown-grid .chart-panel:nth-child(9) {
           border-right: 0;
+        }
+
+        .breakdown-grid .chart-panel:nth-child(9)::before {
+          display: none;
         }
       }
     </style>
