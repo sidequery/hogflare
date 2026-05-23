@@ -166,6 +166,31 @@ models:
         description: Distinct resolved persons with pageviews.
 
     pre_aggregations:
+      - name: analytics_hourly
+        measures:
+          - pageviews
+        dimensions:
+          - event_type
+          - pathname
+          - host
+          - referrer_domain
+          - referrer
+          - browser
+          - os
+          - device_type
+          - geo_country_code
+          - geo_region
+          - geo_city
+          - geo_timezone
+          - cf_asn
+          - utm_source
+          - utm_campaign
+        time_dimension: event_time
+        granularity: hour
+        partition_granularity: day
+        refresh_key:
+          every: 1 hour
+          incremental: false
       - name: analytics_daily
         measures:
           - pageviews

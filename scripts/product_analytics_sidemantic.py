@@ -25,7 +25,7 @@ SNAPSHOT_EVENT = "$snapshot"
 SNAPSHOT_ITEMS_EVENT = "$snapshot_items"
 IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
 NUMERIC_LITERAL_RE = re.compile(r"^-?\d+(?:\.\d+)?$")
-GRANULARITIES = {"day", "week", "month"}
+GRANULARITIES = {"hour", "day", "week", "month"}
 ANALYTICS_BREAKDOWN_LIMIT = 10
 CHART_PANELS = {
     "summary",

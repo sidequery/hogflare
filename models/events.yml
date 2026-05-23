@@ -532,6 +532,33 @@ models:
         description: Count of actors with at least two sessions in the query scope.
 
     pre_aggregations:
+      - name: analytics_hourly
+        measures:
+          - event_count
+          - pageviews
+          - snapshot_events
+        dimensions:
+          - event_type
+          - pathname
+          - host
+          - referrer_domain
+          - referrer
+          - browser
+          - os
+          - device_type
+          - geo_country_code
+          - geo_region
+          - geo_city
+          - geo_timezone
+          - cf_asn
+          - utm_source
+          - utm_campaign
+        time_dimension: event_time
+        granularity: hour
+        partition_granularity: day
+        refresh_key:
+          every: 1 hour
+          incremental: false
       - name: analytics_daily
         measures:
           - event_count

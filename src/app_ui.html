@@ -1426,11 +1426,11 @@
             <div class="date-range" role="group" aria-labelledby="dateRangeLabel">
               <span class="label date-range-label" id="dateRangeLabel">Date range</span>
               <div class="date-presets" aria-label="Date range presets">
-                <button class="preset-button" type="button" data-date-preset="today">Today</button>
-                <button class="preset-button" type="button" data-date-preset="24h">Last 24h</button>
-                <button class="preset-button" type="button" data-date-preset="7d">Last 7d</button>
-                <button class="preset-button" type="button" data-date-preset="30d">Last 30d</button>
-                <button class="preset-button" type="button" data-date-preset="clear">Clear dates</button>
+                <button class="preset-button" type="button" data-date-preset="today" aria-pressed="false">Today</button>
+                <button class="preset-button" type="button" data-date-preset="24h" aria-pressed="false">Last 24h</button>
+                <button class="preset-button" type="button" data-date-preset="7d" aria-pressed="false">Last 7d</button>
+                <button class="preset-button" type="button" data-date-preset="30d" aria-pressed="true">Last 30d</button>
+                <button class="preset-button" type="button" data-date-preset="clear" aria-pressed="false">Clear dates</button>
               </div>
               <div class="date-inputs">
                 <label class="date-field" for="dateFrom">
@@ -1532,7 +1532,8 @@
                 <div class="field wide">
                   <label class="label" for="granularity">Trend grain</label>
                   <select id="granularity" name="granularity">
-                    <option value="day">Day</option>
+                    <option value="hour">Hour</option>
+                    <option value="day" selected>Day</option>
                     <option value="week">Week</option>
                     <option value="month">Month</option>
                   </select>
@@ -1571,7 +1572,7 @@
             </div>
             <div class="actions">
               <button class="button" id="submitButton" type="submit" data-section="replays">Search</button>
-              <button class="button secondary" id="clear" type="button">Clear</button>
+              <button class="button secondary" id="clear" type="button" data-section="replays">Clear</button>
             </div>
           </form>
 
@@ -1804,6 +1805,8 @@
         modeOptions: document.getElementById("modeOptions"),
         funnelStepControls: document.getElementById("funnelStepControls"),
         signalChoices: document.getElementById("signalChoices"),
+        dateFrom: document.getElementById("dateFrom"),
+        dateTo: document.getElementById("dateTo"),
         datePresets: document.querySelector(".date-presets"),
         metric: document.getElementById("metric"),
         dimension: document.getElementById("dimension"),
@@ -1938,6 +1941,7 @@
         "Demo Requested",
       ];
       const defaultFunnelSteps = ["Viewed Pricing", "Checkout Started", ""];
+      const defaultAnalyticsDatePreset = "30d";
       const analyticsPath = "/analytics";
       const replayPath = "/replay";
 
@@ -2007,8 +2011,13 @@
       }
 
       function setDateRange(from, to) {
-        document.getElementById("dateFrom").value = from ? isoToDateInput(from) : "";
-        document.getElementById("dateTo").value = to ? isoToDateInput(to) : "";
+        els.dateFrom.value = from ? isoToDateInput(from) : "";
+        els.dateTo.value = to ? isoToDateInput(to) : "";
+      }
+
+      function dateFromInput(value) {
+        const date = new Date(value);
+        return Number.isFinite(date.getTime()) ? date : null;
       }
 
       function applyDatePreset(preset) {
@@ -2032,13 +2041,63 @@
           return;
         }
         setDateRange(from, to);
+        setGranularityForDatePreset(preset);
         setDatePresetState(preset);
         requestSearchForCurrentMode();
       }
 
       function setDatePresetState(preset) {
         for (const button of els.datePresets.querySelectorAll("[data-date-preset]")) {
-          button.classList.toggle("is-selected", button.dataset.datePreset === preset);
+          const selected = button.dataset.datePreset === preset;
+          button.classList.toggle("is-selected", selected);
+          button.setAttribute("aria-pressed", selected ? "true" : "false");
+        }
+      }
+
+      function setGranularityForDatePreset(preset) {
+        if (state.mode !== "overview") return;
+        if (preset === "24h") {
+          els.granularity.value = "hour";
+        } else if ((preset === "7d" || preset === "30d") && els.granularity.value === "hour") {
+          els.granularity.value = "day";
+        }
+      }
+
+      function ensureDefaultAnalyticsDateRange() {
+        if (els.dateFrom.value || els.dateTo.value) {
+          syncDatePresetFromInputs();
+          return;
+        }
+        const to = new Date();
+        const from = new Date(to);
+        from.setDate(from.getDate() - 30);
+        setDateRange(from, to);
+        setGranularityForDatePreset(defaultAnalyticsDatePreset);
+        setDatePresetState(defaultAnalyticsDatePreset);
+      }
+
+      function syncDatePresetFromInputs() {
+        const from = dateFromInput(els.dateFrom.value);
+        const to = dateFromInput(els.dateTo.value);
+        if (!from || !to) {
+          setDatePresetState("");
+          return;
+        }
+        const minute = 60 * 1000;
+        const tolerance = 5 * minute;
+        const elapsed = to.getTime() - from.getTime();
+        const startOfDay = new Date(to);
+        startOfDay.setHours(0, 0, 0, 0);
+        if (Math.abs(from.getTime() - startOfDay.getTime()) <= tolerance) {
+          setDatePresetState("today");
+        } else if (Math.abs(elapsed - 24 * 60 * minute) <= tolerance) {
+          setDatePresetState("24h");
+        } else if (Math.abs(elapsed - 7 * 24 * 60 * minute) <= tolerance) {
+          setDatePresetState("7d");
+        } else if (Math.abs(elapsed - 30 * 24 * 60 * minute) <= tolerance) {
+          setDatePresetState("30d");
+        } else {
+          setDatePresetState("");
         }
       }
 
@@ -2243,9 +2302,6 @@
           button.setAttribute("aria-selected", mode === key ? "true" : "false");
         }
         els.submitButton.textContent = "Search";
-        els.clear.textContent = state.section === "analytics" ? "Reset" : "Clear";
-        els.clear.classList.toggle("secondary", state.section !== "analytics");
-        els.clear.classList.toggle("subtle", state.section === "analytics");
         els.resultsLabel.textContent = modes[mode].label;
         els.resultControls.classList.toggle("is-hidden", state.section === "analytics");
         let hasModeOptions = false;
@@ -3170,6 +3226,7 @@
       }
 
       function grainLabel(granularity) {
+        if (granularity === "hour") return "Hourly";
         if (granularity === "week") return "Weekly";
         if (granularity === "month") return "Monthly";
         return "Daily";
@@ -3738,6 +3795,9 @@
         if (!button) return;
         applyDatePreset(button.dataset.datePreset);
       });
+      for (const input of [els.dateFrom, els.dateTo]) {
+        input.addEventListener("change", syncDatePresetFromInputs);
+      }
       els.copyLink.addEventListener("click", () => copyLink().catch(() => setStatus("copy failed")));
       els.debugToggle.addEventListener("click", () => els.debug.classList.toggle("is-open"));
       els.clear.addEventListener("click", () => {
@@ -3762,6 +3822,7 @@
         state.selectedPersonItem = null;
         state.sessionPayload = null;
         if (wasAnalytics) {
+          ensureDefaultAnalyticsDateRange();
           requestAnalyticsSearch();
         } else {
           renderResults();
@@ -3785,6 +3846,8 @@
           setField(key, value);
         }
         syncAnalyticsDimensions();
+        if (bootingAnalytics) ensureDefaultAnalyticsDateRange();
+        else syncDatePresetFromInputs();
         renderSemanticFilters();
         setFunnelSteps(params.get("steps") || document.getElementById("steps").value);
         setSignal(params.get("signal") || "");

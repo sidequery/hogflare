@@ -219,6 +219,28 @@ models:
         description: Average pageviews per session.
 
     pre_aggregations:
+      - name: analytics_hourly
+        measures:
+          - session_count
+        dimensions:
+          - landing_path
+          - browser
+          - os
+          - device_type
+          - referrer_domain
+          - referrer
+          - geo_country_code
+          - geo_region
+          - geo_city
+          - geo_timezone
+          - cf_asn
+          - utm_source
+        time_dimension: session_start_at
+        granularity: hour
+        partition_granularity: day
+        refresh_key:
+          every: 1 hour
+          incremental: false
       - name: analytics_daily
         measures:
           - session_count
