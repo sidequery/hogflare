@@ -989,7 +989,7 @@
         display: grid;
         align-content: start;
         gap: 0;
-        padding: 4px 0 12px;
+        padding: 4px 0 0;
       }
 
       .skeleton-line,
@@ -1048,7 +1048,7 @@
       .breakdown-grid .chart-panel {
         border-bottom: 0;
         background: var(--surface);
-        overflow: visible;
+        overflow: hidden;
       }
 
       .breakdown-grid .chart-panel:first-child {
@@ -1140,6 +1140,7 @@
       .breakdown-value {
         position: relative;
         z-index: 1;
+        min-width: max-content;
         color: var(--muted);
         font-family: var(--mono);
         font-size: 11px;
@@ -3245,14 +3246,19 @@
 
       function seriesConfig(charts = null) {
         const focusMetric = charts?.focus?.metric || "";
-        return [
+        const config = [
           {
             key: "focused_value",
             ref: focusMetric,
             label: charts?.focus?.metric_label || "Selected",
             color: "#087a55",
           },
+          { key: "event_count", ref: "events.event_count", label: "Events", color: "#5c6670" },
+          { key: "pageviews", ref: "pageviews.pageviews", label: "Pageviews", color: "#2d5f9a" },
+          { key: "session_count", ref: "events.unique_sessions", label: "Sessions", color: "#9a6b16" },
+          { key: "recordings", ref: "events.snapshot_events", label: "Recordings", color: "#9d332b" },
         ];
+        return config.filter((item, index) => index === 0 || item.ref !== focusMetric);
       }
 
       function grainLabel(granularity) {

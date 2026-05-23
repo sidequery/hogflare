@@ -533,6 +533,17 @@ class SidemanticAnalytics:
         )
         focus_time_dimension = TIME_DIMENSIONS[metric["model"]]
         focus_bucket_ref = f"{metric['model']}.{focus_time_dimension}__{granularity}"
+        context_series_rows = self._rows(
+            metrics=[
+                "events.event_count",
+                "events.pageviews",
+                "events.unique_sessions",
+                "events.snapshot_events",
+            ],
+            dimensions=[f"events.event_time__{granularity}"],
+            filters=events_filters,
+            order_by=[f"events.event_time__{granularity}"],
+        )
         focus_series_rows = self._rows(
             metrics=[metric["ref"]],
             dimensions=[focus_bucket_ref],
@@ -798,6 +809,7 @@ class SidemanticAnalytics:
                 count_metric("Replay chunks", replay_chunks, "events", "snapshot_events"),
             ],
             "series": series_points(
+                context_series_rows,
                 focus_series_rows,
                 focus_time_dimension,
                 granularity,
@@ -856,6 +868,17 @@ class SidemanticAnalytics:
         if panel == "series":
             focus_time_dimension = TIME_DIMENSIONS[metric["model"]]
             focus_bucket_ref = f"{metric['model']}.{focus_time_dimension}__{granularity}"
+            context_series_rows = self._rows(
+                metrics=[
+                    "events.event_count",
+                    "events.pageviews",
+                    "events.unique_sessions",
+                    "events.snapshot_events",
+                ],
+                dimensions=[f"events.event_time__{granularity}"],
+                filters=events_filters,
+                order_by=[f"events.event_time__{granularity}"],
+            )
             focus_series_rows = self._rows(
                 metrics=[metric["ref"]],
                 dimensions=[focus_bucket_ref],
@@ -863,6 +886,7 @@ class SidemanticAnalytics:
                 order_by=[focus_bucket_ref],
             )
             response["series"] = series_points(
+                context_series_rows,
                 focus_series_rows,
                 focus_time_dimension,
                 granularity,
@@ -1215,25 +1239,32 @@ def dimension_ref_for_model(source_ref: str, model: str) -> str | None:
 
 
 def series_points(
+    context_rows: list[dict[str, Any]],
     focus_rows: list[dict[str, Any]],
     focus_time_dimension: str,
     granularity: str,
     focus_value_key: str,
 ) -> list[dict[str, Any]]:
+    context_bucket_key = f"event_time__{granularity}"
     focus_bucket_key = f"{focus_time_dimension}__{granularity}"
+    context_by_bucket = {
+        date_label(row.get(context_bucket_key)): row
+        for row in context_rows
+        if row.get(context_bucket_key) is not None
+    }
     focus_by_bucket = {
         date_label(row.get(focus_bucket_key)): row
         for row in focus_rows
         if row.get(focus_bucket_key) is not None
     }
-    buckets = sorted(focus_by_bucket)
+    buckets = sorted(set(context_by_bucket) | set(focus_by_bucket))
     return [
         {
             "bucket": bucket,
-            "event_count": 0,
-            "pageviews": 0,
-            "session_count": 0,
-            "recordings": 0,
+            "event_count": to_int(context_by_bucket.get(bucket, {}).get("event_count")),
+            "pageviews": to_int(context_by_bucket.get(bucket, {}).get("pageviews")),
+            "session_count": to_int(context_by_bucket.get(bucket, {}).get("unique_sessions")),
+            "recordings": to_int(context_by_bucket.get(bucket, {}).get("snapshot_events")),
             "focused_value": to_float(focus_by_bucket.get(bucket, {}).get(focus_value_key)),
         }
         for bucket in buckets
