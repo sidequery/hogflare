@@ -1,0 +1,187 @@
+models:
+  - name: groups
+    sql: |
+      with event_base as (
+        select
+          uuid,
+          event as event_type,
+          distinct_id as actor_id,
+          coalesce(timestamp, created_at) as event_time,
+          group0,
+          group1,
+          group2,
+          group3,
+          group4,
+          group_properties,
+          extra,
+          api_key
+        from {{ events_table }}
+        where coalesce(timestamp, created_at) is not null
+      ),
+      event_groups as (
+        select
+          uuid || ':group0:' || group0 as group_event_id,
+          uuid,
+          event_type,
+          actor_id,
+          event_time,
+          api_key,
+          'group0' as group_slot,
+          0 as group_slot_index,
+          'company' as configured_group_type,
+          group0 as group_key,
+          json_extract_string(extra, '$.group_type') as posthog_group_type,
+          json_extract_string(extra, '$.group_key') as posthog_group_key,
+          group_properties
+        from event_base
+        where group0 is not null
+        union all
+        select
+          uuid || ':group1:' || group1 as group_event_id,
+          uuid,
+          event_type,
+          actor_id,
+          event_time,
+          api_key,
+          'group1' as group_slot,
+          1 as group_slot_index,
+          'team' as configured_group_type,
+          group1 as group_key,
+          json_extract_string(extra, '$.group_type') as posthog_group_type,
+          json_extract_string(extra, '$.group_key') as posthog_group_key,
+          group_properties
+        from event_base
+        where group1 is not null
+        union all
+        select
+          uuid || ':group2:' || group2 as group_event_id,
+          uuid,
+          event_type,
+          actor_id,
+          event_time,
+          api_key,
+          'group2' as group_slot,
+          2 as group_slot_index,
+          'project' as configured_group_type,
+          group2 as group_key,
+          json_extract_string(extra, '$.group_type') as posthog_group_type,
+          json_extract_string(extra, '$.group_key') as posthog_group_key,
+          group_properties
+        from event_base
+        where group2 is not null
+        union all
+        select
+          uuid || ':group3:' || group3 as group_event_id,
+          uuid,
+          event_type,
+          actor_id,
+          event_time,
+          api_key,
+          'group3' as group_slot,
+          3 as group_slot_index,
+          'org' as configured_group_type,
+          group3 as group_key,
+          json_extract_string(extra, '$.group_type') as posthog_group_type,
+          json_extract_string(extra, '$.group_key') as posthog_group_key,
+          group_properties
+        from event_base
+        where group3 is not null
+        union all
+        select
+          uuid || ':group4:' || group4 as group_event_id,
+          uuid,
+          event_type,
+          actor_id,
+          event_time,
+          api_key,
+          'group4' as group_slot,
+          4 as group_slot_index,
+          'workspace' as configured_group_type,
+          group4 as group_key,
+          json_extract_string(extra, '$.group_type') as posthog_group_type,
+          json_extract_string(extra, '$.group_key') as posthog_group_key,
+          group_properties
+        from event_base
+        where group4 is not null
+      )
+      select
+        group_event_id,
+        uuid,
+        event_type,
+        actor_id,
+        event_time,
+        api_key,
+        group_slot,
+        group_slot_index,
+        configured_group_type,
+        coalesce(posthog_group_type, configured_group_type) as group_type,
+        posthog_group_type,
+        group_key,
+        posthog_group_key,
+        group_properties
+      from event_groups
+    description: One row per grouped event per populated PostHog group slot.
+    primary_key: group_event_id
+    default_time_dimension: event_time
+    default_grain: day
+
+    relationships:
+      - name: events
+        type: many_to_one
+        foreign_key: uuid
+        primary_key: uuid
+
+    dimensions:
+      - name: group_event_id
+        type: categorical
+      - name: uuid
+        type: categorical
+      - name: event_type
+        type: categorical
+      - name: actor_id
+        type: categorical
+      - name: api_key
+        type: categorical
+      - name: group_slot
+        type: categorical
+      - name: group_slot_index
+        type: numeric
+      - name: configured_group_type
+        type: categorical
+      - name: group_key
+        type: categorical
+      - name: group_type
+        type: categorical
+      - name: posthog_group_type
+        type: categorical
+      - name: posthog_group_key
+        type: categorical
+      - name: event_time
+        type: time
+        granularity: day
+
+    metrics:
+      - name: group_event_count
+        agg: count
+        description: Group-slot event rows.
+      - name: unique_groups
+        agg: count_distinct
+        sql: group_key
+        description: Distinct group keys.
+      - name: unique_group_slots
+        agg: count_distinct
+        sql: group_slot
+        description: Populated PostHog group slots.
+      - name: unique_group_types
+        agg: count_distinct
+        sql: group_type
+        description: Distinct configured or event-supplied group types.
+      - name: unique_grouped_users
+        agg: count_distinct
+        sql: actor_id
+        description: Distinct actors linked to groups.
+      - name: group_identify_events
+        agg: count
+        filters:
+          - "event_type = '$groupidentify'"
+        description: Group identify events.

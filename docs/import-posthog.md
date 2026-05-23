@@ -2,7 +2,7 @@
 
 Hogflare includes a host-side importer for backfilling an existing PostHog project into the same Cloudflare Pipeline sink used by the Worker. It reads PostHog's private API with a personal API key, then writes normalized rows to the pipeline:
 
-- persons as `$identify` rows
+- persons as `$identify` event rows and, when configured, `PersonPipelineRecord` snapshots
 - groups as `$groupidentify` rows
 - historical events from HogQL with original `timestamp`, `created_at`, and PostHog event `uuid` when available
 
@@ -42,7 +42,10 @@ export IMPORT_STATE_FILE=".hogflare-import-state.jsonl"
 export IMPORT_TARGET_ACCOUNT_ID="<cloudflare_account_id>"
 export IMPORT_TARGET_BUCKET="<r2_bucket>"
 export IMPORT_TARGET_TABLE="default.hogflare_events_v3"
+export IMPORT_PERSONS_TARGET_TABLE="default.hogflare_persons_v2"
 export WRANGLER_R2_SQL_AUTH_TOKEN="<r2 sql token>"
+export CLOUDFLARE_PERSONS_PIPELINE_ENDPOINT="https://<persons-stream-id>.ingest.cloudflare.com"
+export CLOUDFLARE_PERSONS_PIPELINE_AUTH_TOKEN="<persons pipeline token>" # falls back to event pipeline token
 export IMPORT_CLOUDFLARE_API_TOKEN="<token with Pipelines read>" # optional auto flush discovery
 export IMPORT_PIPELINE_FLUSH_SECS="300" # fallback if Pipelines read is unavailable
 ```
@@ -75,6 +78,8 @@ cargo run --bin import_posthog -- \
   --personal-api-key "$POSTHOG_PERSONAL_API_KEY" \
   --pipeline-endpoint "$CLOUDFLARE_PIPELINE_ENDPOINT" \
   --pipeline-auth-token "$CLOUDFLARE_PIPELINE_AUTH_TOKEN" \
+  --persons-pipeline-endpoint "$CLOUDFLARE_PERSONS_PIPELINE_ENDPOINT" \
+  --persons-pipeline-auth-token "$CLOUDFLARE_PERSONS_PIPELINE_AUTH_TOKEN" \
   --hogflare-api-key phc_example \
   --from 2025-01-01 \
   --to 2025-02-01 \
@@ -91,6 +96,7 @@ cargo run --bin import_posthog -- \
   --target-account-id "$CLOUDFLARE_ACCOUNT_ID" \
   --target-bucket hogflare \
   --target-table default.hogflare_events_v3 \
+  --persons-target-table default.hogflare_persons_v2 \
   --target-auth-token "$WRANGLER_R2_SQL_AUTH_TOKEN" \
   --cloudflare-api-token "$CLOUDFLARE_API_TOKEN"
 ```

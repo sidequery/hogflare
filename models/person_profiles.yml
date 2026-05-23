@@ -1,0 +1,126 @@
+models:
+  - name: person_profiles
+    sql: |
+      with ranked_profiles as (
+        select
+          *,
+          row_number() over (partition by person_id order by updated_at desc, version desc, created_at desc) as profile_rank
+        from {{ persons_table }}
+        where person_id is not null
+      ),
+      profile_base as (
+        select
+          uuid,
+          team_id,
+          source,
+          operation,
+          person_id,
+          person_int_id,
+          canonical_distinct_id as actor_id,
+          canonical_distinct_id,
+          distinct_ids,
+          array_length(distinct_ids) as distinct_id_count,
+          created_at,
+          updated_at,
+          version,
+          properties,
+          properties_set_once,
+          merged_properties,
+          api_key,
+          source_event_uuid,
+          coalesce(
+            json_extract_string(merged_properties, '$.email'),
+            json_extract_string(properties, '$.email')
+          ) as email,
+          nullif(regexp_extract(
+            coalesce(
+              json_extract_string(merged_properties, '$.email'),
+              json_extract_string(properties, '$.email')
+            ),
+            '@([^@]+)$',
+            1
+          ), '') as email_domain,
+          coalesce(
+            json_extract_string(merged_properties, '$.plan'),
+            json_extract_string(properties, '$.plan')
+          ) as plan,
+          coalesce(
+            json_extract_string(merged_properties, '$.name'),
+            json_extract_string(properties, '$.name')
+          ) as name
+        from ranked_profiles
+        where profile_rank = 1
+      )
+      select *
+      from profile_base
+    description: Latest Hogflare person profile snapshot per person id from the R2 Data Catalog persons table.
+    primary_key: person_id
+    default_time_dimension: updated_at
+    default_grain: day
+
+    relationships:
+      - name: persons
+        type: one_to_many
+        foreign_key: person_id
+        primary_key: person_id
+
+    dimensions:
+      - name: uuid
+        type: categorical
+      - name: team_id
+        type: numeric
+      - name: source
+        type: categorical
+      - name: operation
+        type: categorical
+      - name: person_id
+        type: categorical
+      - name: person_int_id
+        type: numeric
+      - name: actor_id
+        type: categorical
+      - name: canonical_distinct_id
+        type: categorical
+      - name: api_key
+        type: categorical
+      - name: source_event_uuid
+        type: categorical
+      - name: email_domain
+        type: categorical
+      - name: plan
+        type: categorical
+      - name: name
+        type: categorical
+      - name: distinct_id_count
+        type: numeric
+      - name: version
+        type: numeric
+      - name: created_at
+        type: time
+        granularity: day
+      - name: updated_at
+        type: time
+        granularity: day
+
+    metrics:
+      - name: profile_count
+        agg: count
+        description: Current person profile rows.
+      - name: unique_actors
+        agg: count_distinct
+        sql: actor_id
+        description: Distinct canonical distinct ids in the person store.
+      - name: total_distinct_ids
+        agg: sum
+        sql: distinct_id_count
+        description: Total distinct id links across person profiles.
+      - name: average_profile_version
+        agg: avg
+        sql: version
+        description: Average person profile version.
+      - name: identified_profiles
+        agg: count
+        filters:
+          - email_domain is not null
+        description: Person profiles with an email-shaped property.
+

@@ -14,13 +14,14 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::groups::GroupTypeMap;
-use crate::pipeline::{PipelineClient, PipelineError, PipelineEvent};
+use crate::pipeline::{PersonPipelineRecord, PipelineClient, PipelineError, PipelineEvent};
 
 const DEFAULT_POSTHOG_HOST: &str = "https://us.posthog.com";
 const DEFAULT_BATCH_SIZE: usize = 500;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_IMPORT_STATE_FILE: &str = ".hogflare-import-state.jsonl";
 const DEFAULT_TARGET_TABLE: &str = "default.hogflare_events_v3";
+const DEFAULT_PERSONS_TARGET_TABLE: &str = "default.hogflare_persons_v2";
 const DEFAULT_PIPELINE_FLUSH_SECS: u64 = 300;
 const MIN_TARGET_WAIT_SECS: u64 = 60;
 const TARGET_WAIT_GRACE_SECS: u64 = 30;
@@ -35,6 +36,8 @@ pub struct ImportConfig {
     pub posthog_personal_api_key: String,
     pub pipeline_endpoint: Url,
     pub pipeline_auth_token: Option<String>,
+    pub persons_pipeline_endpoint: Option<Url>,
+    pub persons_pipeline_auth_token: Option<String>,
     pub pipeline_timeout: Duration,
     pub hogflare_api_key: Option<String>,
     pub posthog_team_id: Option<i64>,
@@ -61,6 +64,7 @@ pub struct ImportConfig {
     pub target_account_id: Option<String>,
     pub target_bucket: Option<String>,
     pub target_table: String,
+    pub persons_target_table: String,
     pub target_auth_token: Option<String>,
     pub target_wait: Duration,
     pub target_poll: Duration,
@@ -113,6 +117,17 @@ impl ImportConfig {
         let pipeline_auth_token = args
             .pipeline_auth_token
             .or_else(|| env_var("CLOUDFLARE_PIPELINE_AUTH_TOKEN"));
+        let persons_pipeline_endpoint = args
+            .persons_pipeline_endpoint
+            .or_else(|| env_var("IMPORT_PERSONS_PIPELINE_ENDPOINT"))
+            .or_else(|| env_var("CLOUDFLARE_PERSONS_PIPELINE_ENDPOINT"))
+            .map(|value| parse_url("CLOUDFLARE_PERSONS_PIPELINE_ENDPOINT", value))
+            .transpose()?;
+        let persons_pipeline_auth_token = args
+            .persons_pipeline_auth_token
+            .or_else(|| env_var("IMPORT_PERSONS_PIPELINE_AUTH_TOKEN"))
+            .or_else(|| env_var("CLOUDFLARE_PERSONS_PIPELINE_AUTH_TOKEN"))
+            .or_else(|| pipeline_auth_token.clone());
         let pipeline_timeout = parse_duration_secs(
             "CLOUDFLARE_PIPELINE_TIMEOUT_SECS",
             args.pipeline_timeout_secs
@@ -275,6 +290,13 @@ impl ImportConfig {
                 .or_else(|| env_var("R2_SQL_TABLE"))
                 .unwrap_or_else(|| DEFAULT_TARGET_TABLE.to_string()),
         )?;
+        let persons_target_table = parse_target_table(
+            "IMPORT_PERSONS_TARGET_TABLE",
+            args.persons_target_table
+                .or_else(|| env_var("IMPORT_PERSONS_TARGET_TABLE"))
+                .or_else(|| env_var("CLOUDFLARE_PERSONS_TARGET_TABLE"))
+                .unwrap_or_else(|| DEFAULT_PERSONS_TARGET_TABLE.to_string()),
+        )?;
         let pipeline_flush = parse_optional_duration_secs(
             "IMPORT_PIPELINE_FLUSH_SECS",
             args.pipeline_flush_secs
@@ -339,6 +361,8 @@ impl ImportConfig {
             posthog_personal_api_key,
             pipeline_endpoint,
             pipeline_auth_token,
+            persons_pipeline_endpoint,
+            persons_pipeline_auth_token,
             pipeline_timeout,
             hogflare_api_key,
             posthog_team_id,
@@ -365,6 +389,7 @@ impl ImportConfig {
             target_account_id,
             target_bucket,
             target_table,
+            persons_target_table,
             target_auth_token,
             target_wait,
             target_poll,
@@ -393,6 +418,8 @@ struct ImportArgs {
     posthog_personal_api_key: Option<String>,
     pipeline_endpoint: Option<String>,
     pipeline_auth_token: Option<String>,
+    persons_pipeline_endpoint: Option<String>,
+    persons_pipeline_auth_token: Option<String>,
     pipeline_timeout_secs: Option<String>,
     hogflare_api_key: Option<String>,
     team_id: Option<String>,
@@ -420,6 +447,7 @@ struct ImportArgs {
     target_account_id: Option<String>,
     target_bucket: Option<String>,
     target_table: Option<String>,
+    persons_target_table: Option<String>,
     target_auth_token: Option<String>,
     target_wait_secs: Option<String>,
     pipeline_flush_secs: Option<String>,
@@ -455,6 +483,12 @@ impl ImportArgs {
                 }
                 "--pipeline-auth-token" => {
                     parsed.pipeline_auth_token = Some(next_arg(&arg, &mut args)?);
+                }
+                "--persons-pipeline-endpoint" => {
+                    parsed.persons_pipeline_endpoint = Some(next_arg(&arg, &mut args)?);
+                }
+                "--persons-pipeline-auth-token" => {
+                    parsed.persons_pipeline_auth_token = Some(next_arg(&arg, &mut args)?);
                 }
                 "--pipeline-timeout-secs" => {
                     parsed.pipeline_timeout_secs = Some(next_arg(&arg, &mut args)?);
@@ -506,6 +540,9 @@ impl ImportArgs {
                 }
                 "--target-table" => {
                     parsed.target_table = Some(next_arg(&arg, &mut args)?);
+                }
+                "--persons-target-table" => {
+                    parsed.persons_target_table = Some(next_arg(&arg, &mut args)?);
                 }
                 "--target-auth-token" => {
                     parsed.target_auth_token = Some(next_arg(&arg, &mut args)?);
@@ -686,12 +723,23 @@ fn parse_datetime(value: &str) -> Option<DateTime<Utc>> {
 }
 
 fn deterministic_import_uuid(parts: &[&str]) -> String {
+    deterministic_import_uuid_value(parts).to_string()
+}
+
+fn deterministic_import_uuid_value(parts: &[&str]) -> Uuid {
     let mut name = String::from("hogflare:posthog-import");
     for part in parts {
         name.push('\u{1f}');
         name.push_str(part);
     }
-    Uuid::new_v5(&Uuid::NAMESPACE_URL, name.as_bytes()).to_string()
+    Uuid::new_v5(&Uuid::NAMESPACE_URL, name.as_bytes())
+}
+
+fn stable_import_int_id(parts: &[&str]) -> i64 {
+    let uuid = deterministic_import_uuid_value(parts);
+    let mut bytes = [0_u8; 8];
+    bytes.copy_from_slice(&uuid.as_bytes()[..8]);
+    i64::from_be_bytes(bytes) & i64::MAX
 }
 
 fn target_wait_for_flush(flush_secs: u64) -> Duration {
@@ -806,6 +854,7 @@ async fn align_target_wait_to_pipeline_flush(config: &mut ImportConfig) -> Resul
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportSummary {
     pub persons: usize,
+    pub person_snapshots: usize,
     pub groups: usize,
     pub events: usize,
     pub skipped: usize,
@@ -886,6 +935,7 @@ pub enum ImportError {
 enum ImportKind {
     Event,
     Person,
+    PersonSnapshot,
     Group,
 }
 
@@ -894,6 +944,7 @@ impl ImportKind {
         match self {
             Self::Event => "event",
             Self::Person => "person",
+            Self::PersonSnapshot => "person_snapshot",
             Self::Group => "group",
         }
     }
@@ -926,6 +977,15 @@ impl ImportKey {
         }
     }
 
+    fn person_snapshot(uuid: String, person_id: String) -> Self {
+        Self {
+            uuid,
+            kind: ImportKind::PersonSnapshot,
+            logical_key: person_id,
+            group_type: None,
+        }
+    }
+
     fn group(uuid: String, group_type: String, group_key: String) -> Self {
         Self {
             uuid,
@@ -939,6 +999,7 @@ impl ImportKey {
         match self.kind {
             ImportKind::Event => format!("event\t{}", self.logical_key),
             ImportKind::Person => format!("person\t{}", self.logical_key),
+            ImportKind::PersonSnapshot => format!("person_snapshot\t{}", self.logical_key),
             ImportKind::Group => format!(
                 "group\t{}\t{}",
                 self.group_type.as_deref().unwrap_or_default(),
@@ -963,6 +1024,12 @@ struct ImportBatchItem {
     event: PipelineEvent,
 }
 
+#[derive(Debug, Clone)]
+struct PersonSnapshotBatchItem {
+    key: ImportKey,
+    record: PersonPipelineRecord,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ImportStateRecord {
     kind: String,
@@ -978,6 +1045,7 @@ impl ImportStateRecord {
         match self.kind.as_str() {
             "event" => Some(format!("event\t{}", self.key)),
             "person" => Some(format!("person\t{}", self.key)),
+            "person_snapshot" => Some(format!("person_snapshot\t{}", self.key)),
             "group" => Some(format!(
                 "group\t{}\t{}",
                 self.group_type.as_deref().unwrap_or_default(),
@@ -1090,6 +1158,13 @@ struct R2SqlTarget {
 
 impl R2SqlTarget {
     fn from_config(config: &ImportConfig) -> Result<Option<Self>, ImportError> {
+        Self::from_config_table(config, config.target_table.clone())
+    }
+
+    fn from_config_table(
+        config: &ImportConfig,
+        table: String,
+    ) -> Result<Option<Self>, ImportError> {
         if !config.target_checks_enabled {
             return Ok(None);
         }
@@ -1114,7 +1189,7 @@ impl R2SqlTarget {
             client,
             endpoint,
             auth_token,
-            table: config.target_table.clone(),
+            table,
         }))
     }
 
@@ -1123,6 +1198,16 @@ impl R2SqlTarget {
         self.mark_existing_by_uuid(keys, &mut existing).await?;
         self.mark_existing_persons(keys, &mut existing).await?;
         self.mark_existing_groups(keys, &mut existing).await?;
+        Ok(existing)
+    }
+
+    async fn existing_person_snapshots(
+        &self,
+        keys: &[ImportKey],
+    ) -> Result<HashSet<String>, ImportError> {
+        let mut existing = HashSet::new();
+        self.mark_existing_person_snapshots(keys, &mut existing)
+            .await?;
         Ok(existing)
     }
 
@@ -1135,6 +1220,28 @@ impl R2SqlTarget {
         let started = Instant::now();
         loop {
             let existing = self.existing_keys(keys).await?;
+            if existing.len() == keys.len() || started.elapsed() >= wait {
+                return Ok(existing);
+            }
+
+            let remaining = wait.saturating_sub(started.elapsed());
+            let sleep_for = remaining.min(poll);
+            if sleep_for.is_zero() {
+                return Ok(existing);
+            }
+            tokio::time::sleep(sleep_for).await;
+        }
+    }
+
+    async fn wait_for_person_snapshots(
+        &self,
+        keys: &[ImportKey],
+        wait: Duration,
+        poll: Duration,
+    ) -> Result<HashSet<String>, ImportError> {
+        let started = Instant::now();
+        loop {
+            let existing = self.existing_person_snapshots(keys).await?;
             if existing.len() == keys.len() || started.elapsed() >= wait {
                 return Ok(existing);
             }
@@ -1248,6 +1355,37 @@ impl R2SqlTarget {
                             == Some(key.logical_key.as_str())
                     {
                         existing.insert(key.state_key());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn mark_existing_person_snapshots(
+        &self,
+        keys: &[ImportKey],
+        existing: &mut HashSet<String>,
+    ) -> Result<(), ImportError> {
+        let mut keys_by_person_id: HashMap<String, String> = HashMap::new();
+        for key in keys
+            .iter()
+            .filter(|key| matches!(key.kind, ImportKind::PersonSnapshot))
+        {
+            keys_by_person_id.insert(key.logical_key.clone(), key.state_key());
+        }
+        let person_ids = keys_by_person_id.keys().cloned().collect::<Vec<_>>();
+        for chunk in person_ids.chunks(500) {
+            let person_id_list = sql_string_list(chunk);
+            let query = format!(
+                "select person_id from {} where source = 'posthog' and person_id in ({person_id_list}) group by person_id limit {}",
+                self.table,
+                chunk.len()
+            );
+            for row in self.query_rows(query).await? {
+                if let Some(person_id) = row_string(&row, "person_id") {
+                    if let Some(state_key) = keys_by_person_id.get(&person_id) {
+                        existing.insert(state_key.clone());
                     }
                 }
             }
@@ -1437,7 +1575,15 @@ pub async fn run_import(config: ImportConfig) -> Result<ImportSummary, ImportErr
         config.pipeline_auth_token.clone(),
         config.pipeline_timeout,
     )?;
-    let mut importer = Importer::new(config, client, pipeline)?;
+    let persons_pipeline = match config.persons_pipeline_endpoint.clone() {
+        Some(endpoint) => Some(PipelineClient::new_without_retries(
+            endpoint,
+            config.persons_pipeline_auth_token.clone(),
+            config.pipeline_timeout,
+        )?),
+        None => None,
+    };
+    let mut importer = Importer::new(config, client, pipeline, persons_pipeline)?;
 
     importer.run().await
 }
@@ -1446,11 +1592,13 @@ struct Importer {
     config: ImportConfig,
     posthog: PostHogClient,
     pipeline: PipelineClient,
+    persons_pipeline: Option<PipelineClient>,
     group_type_map: GroupTypeMap,
     persons_by_distinct_id: HashMap<String, ImportedPersonSnapshot>,
     group_properties: HashMap<(String, String), Map<String, Value>>,
     import_state: ImportState,
     target: Option<R2SqlTarget>,
+    persons_target: Option<R2SqlTarget>,
     summary: ImportSummary,
 }
 
@@ -1459,19 +1607,27 @@ impl Importer {
         config: ImportConfig,
         posthog: PostHogClient,
         pipeline: PipelineClient,
+        persons_pipeline: Option<PipelineClient>,
     ) -> Result<Self, ImportError> {
         let group_type_map = GroupTypeMap::new(config.posthog_group_types.clone());
         let import_state = ImportState::load(config.import_state_file.clone())?;
         let target = R2SqlTarget::from_config(&config)?;
+        let persons_target = if persons_pipeline.is_some() {
+            R2SqlTarget::from_config_table(&config, config.persons_target_table.clone())?
+        } else {
+            None
+        };
         Ok(Self {
             config,
             posthog,
             pipeline,
+            persons_pipeline,
             group_type_map,
             persons_by_distinct_id: HashMap::new(),
             group_properties: HashMap::new(),
             import_state,
             target,
+            persons_target,
             summary: ImportSummary::default(),
         })
     }
@@ -1493,7 +1649,8 @@ impl Importer {
     }
 
     async fn import_persons(&mut self) -> Result<(), ImportError> {
-        let mut buffer = Vec::new();
+        let mut event_buffer = Vec::new();
+        let mut snapshot_buffer = Vec::new();
         let mut next = self
             .next_limit(self.config.max_persons, self.summary.persons)
             .map(|limit| self.posthog.persons_url(limit, self.config.persons_offset))
@@ -1513,15 +1670,33 @@ impl Importer {
 
                 if self.config.emit_persons {
                     if let Some(event) = person.to_pipeline_event(&self.config) {
-                        buffer.push(ImportBatchItem {
+                        event_buffer.push(ImportBatchItem {
                             key: ImportKey::person(event.uuid.clone(), event.distinct_id.clone()),
                             event,
                         });
                     }
                 }
 
-                if buffer.len() >= self.config.batch_size {
-                    self.send(std::mem::take(&mut buffer)).await?;
+                if self.persons_pipeline.is_some() {
+                    if let Some(record) = person.to_person_pipeline_record(&self.config) {
+                        snapshot_buffer.push(PersonSnapshotBatchItem {
+                            key: ImportKey::person_snapshot(
+                                record.uuid.clone(),
+                                record.person_id.clone(),
+                            ),
+                            record,
+                        });
+                    }
+                }
+
+                if event_buffer.len() >= self.config.batch_size {
+                    self.send(std::mem::take(&mut event_buffer)).await?;
+                }
+                if snapshot_buffer.len() >= self.config.batch_size {
+                    let sent = self
+                        .send_person_snapshots(std::mem::take(&mut snapshot_buffer))
+                        .await?;
+                    self.summary.person_snapshots += sent;
                 }
 
                 self.summary.persons += 1;
@@ -1537,7 +1712,10 @@ impl Importer {
             }
         }
 
-        self.send(buffer).await.map(|_| ())
+        self.send(event_buffer).await?;
+        let sent = self.send_person_snapshots(snapshot_buffer).await?;
+        self.summary.person_snapshots += sent;
+        Ok(())
     }
 
     async fn import_groups(&mut self) -> Result<(), ImportError> {
@@ -1906,6 +2084,44 @@ impl Importer {
         }
     }
 
+    async fn send_person_snapshots(
+        &mut self,
+        items: Vec<PersonSnapshotBatchItem>,
+    ) -> Result<usize, ImportError> {
+        let items = self.filter_existing_person_snapshots(items).await?;
+        if items.is_empty() {
+            return Ok(0);
+        }
+
+        let keys = items
+            .iter()
+            .map(|item| item.key.clone())
+            .collect::<Vec<_>>();
+        if self.config.dry_run {
+            self.summary.pipeline_batches += 1;
+            return Ok(items.len());
+        }
+
+        let records = items
+            .iter()
+            .map(|item| item.record.clone())
+            .collect::<Vec<_>>();
+        let Some(pipeline) = self.persons_pipeline.as_ref() else {
+            return Ok(0);
+        };
+        match pipeline.send_records(records).await {
+            Ok(()) => {
+                self.import_state.record(&keys)?;
+                self.summary.pipeline_batches += 1;
+                Ok(keys.len())
+            }
+            Err(source) => {
+                self.handle_ambiguous_person_snapshot_send(keys, source)
+                    .await
+            }
+        }
+    }
+
     async fn filter_existing(
         &mut self,
         items: Vec<ImportBatchItem>,
@@ -1950,6 +2166,50 @@ impl Importer {
         Ok(filtered)
     }
 
+    async fn filter_existing_person_snapshots(
+        &mut self,
+        items: Vec<PersonSnapshotBatchItem>,
+    ) -> Result<Vec<PersonSnapshotBatchItem>, ImportError> {
+        let mut batch_seen = HashSet::new();
+        let mut filtered = Vec::with_capacity(items.len());
+        let mut skipped = 0;
+
+        for item in items {
+            let state_key = item.key.state_key();
+            if self.import_state.contains(&item.key) || !batch_seen.insert(state_key) {
+                skipped += 1;
+            } else {
+                filtered.push(item);
+            }
+        }
+
+        if let Some(target) = self.persons_target.as_ref() {
+            let keys = filtered
+                .iter()
+                .map(|item| item.key.clone())
+                .collect::<Vec<_>>();
+            let existing = target.existing_person_snapshots(&keys).await?;
+            if !existing.is_empty() {
+                let mut existing_keys = Vec::new();
+                filtered.retain(|item| {
+                    if existing.contains(&item.key.state_key()) {
+                        existing_keys.push(item.key.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                skipped += existing_keys.len();
+                if !self.config.dry_run {
+                    self.import_state.record(&existing_keys)?;
+                }
+            }
+        }
+
+        self.summary.skipped += skipped;
+        Ok(filtered)
+    }
+
     async fn handle_ambiguous_send(
         &mut self,
         keys: Vec<ImportKey>,
@@ -1966,6 +2226,44 @@ impl Importer {
 
         let existing = target
             .wait_for_existing_keys(&keys, self.config.target_wait, self.config.target_poll)
+            .await?;
+        let confirmed = keys
+            .iter()
+            .filter(|key| existing.contains(&key.state_key()))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !confirmed.is_empty() {
+            self.import_state.record(&confirmed)?;
+        }
+        if confirmed.len() == keys.len() {
+            self.summary.pipeline_batches += 1;
+            return Ok(confirmed.len());
+        }
+
+        Err(ImportError::AmbiguousPipelineCommit {
+            confirmed: confirmed.len(),
+            total: keys.len(),
+            wait_secs: self.config.target_wait.as_secs(),
+            source,
+        })
+    }
+
+    async fn handle_ambiguous_person_snapshot_send(
+        &mut self,
+        keys: Vec<ImportKey>,
+        source: PipelineError,
+    ) -> Result<usize, ImportError> {
+        let Some(target) = self.persons_target.as_ref() else {
+            return Err(ImportError::AmbiguousPipelineCommit {
+                confirmed: 0,
+                total: keys.len(),
+                wait_secs: 0,
+                source,
+            });
+        };
+
+        let existing = target
+            .wait_for_person_snapshots(&keys, self.config.target_wait, self.config.target_poll)
             .await?;
         let confirmed = keys
             .iter()
@@ -2338,12 +2636,24 @@ impl PostHogPerson {
             .or_else(|| self.id.as_ref().and_then(value_to_string))
     }
 
+    fn person_key(&self) -> Option<String> {
+        self.posthog_person_id()
+            .or_else(|| self.primary_distinct_id())
+    }
+
+    fn posthog_person_id(&self) -> Option<String> {
+        self.uuid
+            .clone()
+            .or_else(|| self.id.as_ref().and_then(value_to_string))
+    }
+
+    fn person_int_id(&self) -> Option<i64> {
+        self.id.as_ref().and_then(value_to_i64)
+    }
+
     fn snapshot(&self) -> Option<ImportedPersonSnapshot> {
         Some(ImportedPersonSnapshot {
-            person_id: self
-                .uuid
-                .clone()
-                .or_else(|| self.id.as_ref().and_then(value_to_string)),
+            person_id: self.person_key(),
             created_at: self.created_at,
             properties: self.properties.clone(),
         })
@@ -2351,10 +2661,7 @@ impl PostHogPerson {
 
     fn to_pipeline_event(&self, config: &ImportConfig) -> Option<PipelineEvent> {
         let distinct_id = self.primary_distinct_id()?;
-        let person_id = self
-            .uuid
-            .clone()
-            .or_else(|| self.id.as_ref().and_then(value_to_string));
+        let person_id = self.posthog_person_id();
         let person_key = person_id.clone().unwrap_or_else(|| distinct_id.clone());
         let import_uuid = deterministic_import_uuid(&[
             &config.posthog_project_id,
@@ -2408,6 +2715,60 @@ impl PostHogPerson {
             group_properties: None,
             api_key: config.hogflare_api_key.clone(),
             extra,
+        })
+    }
+
+    fn to_person_pipeline_record(&self, config: &ImportConfig) -> Option<PersonPipelineRecord> {
+        let canonical_distinct_id = self.primary_distinct_id()?;
+        let person_id = self.person_key()?;
+        let created_at = self.created_at.unwrap_or_else(Utc::now);
+        let source_event_uuid = deterministic_import_uuid(&[
+            &config.posthog_project_id,
+            config.posthog_environment_id.as_deref().unwrap_or(""),
+            "person",
+            &person_id,
+        ]);
+        let uuid = deterministic_import_uuid(&[
+            &config.posthog_project_id,
+            config.posthog_environment_id.as_deref().unwrap_or(""),
+            "person_snapshot",
+            &person_id,
+        ]);
+        let distinct_ids = if self.distinct_ids.is_empty() {
+            vec![canonical_distinct_id.clone()]
+        } else {
+            self.distinct_ids.clone()
+        };
+        let properties = self
+            .properties
+            .clone()
+            .unwrap_or_else(|| Value::Object(Map::new()));
+        let person_int_id = self.person_int_id().unwrap_or_else(|| {
+            stable_import_int_id(&[
+                &config.posthog_project_id,
+                config.posthog_environment_id.as_deref().unwrap_or(""),
+                "person",
+                &person_id,
+            ])
+        });
+
+        Some(PersonPipelineRecord {
+            uuid,
+            team_id: config.posthog_team_id,
+            source: "posthog",
+            operation: "import".to_string(),
+            person_id,
+            person_int_id,
+            canonical_distinct_id,
+            distinct_ids: Value::Array(distinct_ids.into_iter().map(Value::String).collect()),
+            created_at,
+            updated_at: Utc::now(),
+            version: 1,
+            properties: properties.clone(),
+            properties_set_once: Value::Object(Map::new()),
+            merged_properties: properties,
+            api_key: config.hogflare_api_key.clone(),
+            source_event_uuid,
         })
     }
 }
@@ -2575,6 +2936,14 @@ fn value_to_string(value: &Value) -> Option<String> {
     }
 }
 
+fn value_to_i64(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(value) => value.as_i64(),
+        Value::String(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
 fn value_to_datetime(value: &Value) -> Option<DateTime<Utc>> {
     value.as_str().and_then(parse_datetime)
 }
@@ -2606,6 +2975,8 @@ fn usage() -> String {
         "  --posthog-host https://us.posthog.com",
         "  --environment-id <environment id>",
         "  --pipeline-auth-token <token>",
+        "  --persons-pipeline-endpoint <url>",
+        "  --persons-pipeline-auth-token <token>",
         "  --hogflare-api-key <project API key>",
         "  --from 2025-01-01",
         "  --to 2025-02-01",
@@ -2621,6 +2992,7 @@ fn usage() -> String {
         "  --target-account-id <cloudflare account id>",
         "  --target-bucket <r2 bucket>",
         "  --target-table default.hogflare_events_v3",
+        "  --persons-target-table default.hogflare_persons_v2",
         "  --target-auth-token <r2 sql token>",
         "  --target-wait-secs <secs>",
         "  --pipeline-flush-secs 300",
@@ -2646,6 +3018,8 @@ mod tests {
             posthog_personal_api_key: "phx_test".to_string(),
             pipeline_endpoint: Url::parse("http://127.0.0.1:1/").unwrap(),
             pipeline_auth_token: None,
+            persons_pipeline_endpoint: None,
+            persons_pipeline_auth_token: None,
             pipeline_timeout: Duration::from_secs(1),
             hogflare_api_key: Some("phc_test".to_string()),
             posthog_team_id: Some(42),
@@ -2672,6 +3046,7 @@ mod tests {
             target_account_id: None,
             target_bucket: None,
             target_table: DEFAULT_TARGET_TABLE.to_string(),
+            persons_target_table: DEFAULT_PERSONS_TARGET_TABLE.to_string(),
             target_auth_token: None,
             target_wait: target_wait_for_flush(DEFAULT_PIPELINE_FLUSH_SECS),
             target_poll: target_poll_for_flush(DEFAULT_PIPELINE_FLUSH_SECS),
@@ -2717,6 +3092,10 @@ mod tests {
             "phx_test",
             "--pipeline-endpoint",
             "http://127.0.0.1:1/",
+            "--persons-pipeline-endpoint",
+            "http://127.0.0.1:2/",
+            "--persons-pipeline-auth-token",
+            "persons-token",
             "--dry-run",
             "--persons-offset",
             "10",
@@ -2751,6 +3130,12 @@ mod tests {
             "phx_test",
             "--pipeline-endpoint",
             "http://127.0.0.1:1/",
+            "--persons-pipeline-endpoint",
+            "http://127.0.0.1:2/",
+            "--persons-pipeline-auth-token",
+            "persons-token",
+            "--persons-target-table",
+            "default.custom_persons",
             "--dry-run",
             "--persons-offset",
             "10",
@@ -2787,6 +3172,15 @@ mod tests {
             config.events_after_uuid.as_deref(),
             Some("0192129b-c354-77b4-b496-9be7ec571fb4")
         );
+        assert_eq!(
+            config.persons_pipeline_endpoint.as_ref().map(Url::as_str),
+            Some("http://127.0.0.1:2/")
+        );
+        assert_eq!(
+            config.persons_pipeline_auth_token.as_deref(),
+            Some("persons-token")
+        );
+        assert_eq!(config.persons_target_table, "default.custom_persons");
         assert_eq!(config.event_uuids_file.as_deref(), Some("/tmp/missing.txt"));
         assert_eq!(config.event_window_days, None);
         assert_eq!(config.event_window_hours, Some(6));
@@ -2904,6 +3298,41 @@ mod tests {
     }
 
     #[test]
+    fn person_import_snapshot_uses_stable_uuid_and_schema() {
+        let config = base_config();
+        let person: PostHogPerson = serde_json::from_value(json!({
+            "id": 7,
+            "uuid": "person-uuid",
+            "distinct_ids": ["user-1", "anon-1"],
+            "properties": {"email": "u@example.com"},
+            "created_at": "2025-01-02T03:04:05Z"
+        }))
+        .unwrap();
+
+        let event = person.to_pipeline_event(&config).unwrap();
+        let first = person.to_person_pipeline_record(&config).unwrap();
+        let second = person.to_person_pipeline_record(&config).unwrap();
+
+        assert_eq!(first.uuid, second.uuid);
+        assert_eq!(first.source, "posthog");
+        assert_eq!(first.operation, "import");
+        assert_eq!(first.person_id, "person-uuid");
+        assert_eq!(first.person_int_id, 7);
+        assert_eq!(first.canonical_distinct_id, "user-1");
+        assert_eq!(first.distinct_ids, json!(["user-1", "anon-1"]));
+        assert_eq!(
+            first.created_at,
+            parse_datetime("2025-01-02T03:04:05Z").unwrap()
+        );
+        assert_eq!(first.version, 1);
+        assert_eq!(first.properties, json!({"email": "u@example.com"}));
+        assert_eq!(first.properties_set_once, json!({}));
+        assert_eq!(first.merged_properties, json!({"email": "u@example.com"}));
+        assert_eq!(first.api_key.as_deref(), Some("phc_test"));
+        assert_eq!(first.source_event_uuid, event.uuid);
+    }
+
+    #[test]
     fn client_prefers_environment_scoped_person_and_group_urls() {
         let config = base_config();
         let client = PostHogClient::new(
@@ -2985,6 +3414,7 @@ mod tests {
         let keys = vec![
             ImportKey::event("event-uuid".to_string()),
             ImportKey::person("person-event-uuid".to_string(), "user-1".to_string()),
+            ImportKey::person_snapshot("person-snapshot-uuid".to_string(), "person-1".to_string()),
             ImportKey::group(
                 "group-event-uuid".to_string(),
                 "company".to_string(),
@@ -3018,7 +3448,7 @@ mod tests {
             Duration::from_secs(1),
         )
         .unwrap();
-        let mut importer = Importer::new(config, posthog, pipeline).unwrap();
+        let mut importer = Importer::new(config, posthog, pipeline, None).unwrap();
         importer.persons_by_distinct_id.insert(
             "user-1".to_string(),
             ImportedPersonSnapshot {

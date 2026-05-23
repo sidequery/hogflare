@@ -1,0 +1,78 @@
+metrics:
+  - name: identification_rate
+    type: ratio
+    numerator: events.known_persons
+    denominator: events.unique_users
+    description: Share of active actors that have a resolved Hogflare person id.
+
+  - name: pageviews_per_session
+    type: ratio
+    numerator: sessions.total_pageviews
+    denominator: sessions.session_count
+    description: Average pageview events per real PostHog SDK session.
+
+  - name: events_per_user
+    type: ratio
+    numerator: events.event_count
+    denominator: events.unique_users
+    description: Average events per active actor.
+
+  - name: grouped_event_rate
+    type: ratio
+    numerator: events.grouped_events
+    denominator: events.event_count
+    description: Share of events linked to any group.
+
+  - name: day_1_retention_rate
+    type: ratio
+    numerator: first_event_retention.day_1_retained_users
+    denominator: first_event_retention.cohort_users
+    description: Share of first-event cohort users active one day later.
+
+  - name: day_7_retention_rate
+    type: ratio
+    numerator: first_event_retention.day_7_retained_users
+    denominator: first_event_retention.cohort_users
+    description: Share of first-event cohort users active seven days later.
+
+  - name: day_30_retention_rate
+    type: ratio
+    numerator: first_event_retention.day_30_retained_users
+    denominator: first_event_retention.cohort_users
+    description: Share of first-event cohort users active thirty days later.
+
+  - name: bounce_rate
+    type: ratio
+    numerator: sessions.bounced_sessions
+    denominator: sessions.session_count
+    description: Share of real PostHog SDK sessions with one or fewer pageviews.
+
+  - name: engagement_rate
+    type: ratio
+    numerator: sessions.engaged_sessions
+    denominator: sessions.session_count
+    description: Share of real PostHog SDK sessions with multiple events or at least 10 seconds duration.
+
+  - name: fallback_activity_engagement_rate
+    type: ratio
+    numerator: activity_days.engaged_activity_days
+    denominator: activity_days.activity_day_count
+    description: Share of fallback actor/day rows with multiple events or at least 10 seconds duration.
+
+  - name: identity_links_per_profile
+    type: ratio
+    numerator: identity_links.identity_link_count
+    denominator: identity_links.resolved_persons
+    description: Average distinct-id links per resolved person profile.
+
+  - name: attributed_actor_rate
+    type: ratio
+    numerator: attribution.attributed_actors
+    denominator: attribution.actor_count
+    description: Share of active actors with UTM, initial UTM, or referrer attribution.
+
+  - name: group_rows_per_grouped_event
+    type: ratio
+    numerator: groups.group_event_count
+    denominator: events.grouped_events
+    description: Average populated group slots per grouped event.

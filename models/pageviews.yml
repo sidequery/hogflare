@@ -1,0 +1,142 @@
+models:
+  - name: pageviews
+    sql: |
+      with events as (
+        select *
+        from (
+          with latest_profiles as (
+            select *
+            from (
+              select
+                *,
+                row_number() over (partition by person_id order by updated_at desc, version desc, created_at desc) as profile_rank
+              from {{ persons_table }}
+              where person_id is not null
+            )
+            where profile_rank = 1
+          ),
+          identity_map as (
+            select
+              resolved_person_id,
+              canonical_distinct_id,
+              linked_distinct_id
+            from (
+              select
+                person_id as resolved_person_id,
+                canonical_distinct_id,
+                distinct_id as linked_distinct_id,
+                row_number() over (partition by distinct_id order by updated_at desc, version desc, created_at desc) as identity_rank
+              from latest_profiles,
+              unnest(distinct_ids) as identity_distinct_ids(distinct_id)
+              where distinct_id is not null
+            )
+            where identity_rank = 1
+          ),
+          source as (
+            select
+              uuid,
+              event as event_type,
+              distinct_id,
+              distinct_id as actor_id,
+              coalesce(timestamp, created_at) as event_time,
+              properties,
+              person_id,
+              coalesce(person_id, identity_map.resolved_person_id) as resolved_person_id,
+              identity_map.canonical_distinct_id,
+              group0,
+              group1,
+              group2,
+              group3,
+              group4,
+              api_key,
+              coalesce(json_extract_string(properties, '$.$session_id'), json_extract_string(properties, '$.session_id')) as session_id,
+              coalesce(json_extract_string(properties, '$.$current_url'), json_extract_string(properties, '$.current_url'), json_extract_string(properties, '$.url')) as current_url,
+              coalesce(json_extract_string(properties, '$.$pathname'), json_extract_string(properties, '$.pathname'), json_extract_string(properties, '$.path')) as pathname,
+              coalesce(json_extract_string(properties, '$.$host'), json_extract_string(properties, '$.host')) as host,
+              coalesce(json_extract_string(properties, '$.$title'), json_extract_string(properties, '$.title')) as page_title,
+              coalesce(json_extract_string(properties, '$.$referrer'), json_extract_string(properties, '$.referrer')) as referrer,
+              coalesce(json_extract_string(properties, '$.$utm_source'), json_extract_string(properties, '$.utm_source'), json_extract_string(properties, '$.$initial_utm_source')) as utm_source,
+              coalesce(json_extract_string(properties, '$.$utm_medium'), json_extract_string(properties, '$.utm_medium'), json_extract_string(properties, '$.$initial_utm_medium')) as utm_medium,
+              coalesce(json_extract_string(properties, '$.$utm_campaign'), json_extract_string(properties, '$.utm_campaign'), json_extract_string(properties, '$.$initial_utm_campaign')) as utm_campaign,
+              coalesce(json_extract_string(properties, '$.$browser'), json_extract_string(properties, '$.browser')) as browser,
+              coalesce(json_extract_string(properties, '$.$os'), json_extract_string(properties, '$.os')) as os,
+              coalesce(json_extract_string(properties, '$.$device_type'), json_extract_string(properties, '$.device_type')) as device_type,
+              coalesce(json_extract_string(properties, '$.$geoip_country_code'), json_extract_string(properties, '$.country')) as geo_country_code
+            from {{ events_table }}
+            left join identity_map on distinct_id = identity_map.linked_distinct_id
+          )
+          select
+            *,
+            coalesce(session_id, actor_id || ':' || strftime(event_time, '%Y-%m-%d')) as session_key
+          from source
+        )
+        where event_type in ('$pageview', 'page_view', '$screen', 'screen')
+      )
+      select * from events
+    description: Pageview and screen-event view for web/product analytics.
+    primary_key: uuid
+    default_time_dimension: event_time
+    default_grain: day
+
+    dimensions:
+      - name: uuid
+        type: categorical
+      - name: event_type
+        type: categorical
+      - name: actor_id
+        type: categorical
+      - name: person_id
+        type: categorical
+      - name: resolved_person_id
+        type: categorical
+      - name: canonical_distinct_id
+        type: categorical
+      - name: session_id
+        type: categorical
+      - name: session_key
+        type: categorical
+      - name: current_url
+        type: categorical
+      - name: pathname
+        type: categorical
+      - name: host
+        type: categorical
+      - name: page_title
+        type: categorical
+      - name: referrer
+        type: categorical
+      - name: utm_source
+        type: categorical
+      - name: utm_medium
+        type: categorical
+      - name: utm_campaign
+        type: categorical
+      - name: browser
+        type: categorical
+      - name: os
+        type: categorical
+      - name: device_type
+        type: categorical
+      - name: geo_country_code
+        type: categorical
+      - name: event_time
+        type: time
+        granularity: day
+
+    metrics:
+      - name: pageviews
+        agg: count
+        description: Total pageview and screen events.
+      - name: unique_visitors
+        agg: count_distinct
+        sql: actor_id
+        description: Distinct actors with pageviews.
+      - name: unique_sessions
+        agg: count_distinct
+        sql: session_key
+        description: Distinct sessions with pageviews.
+      - name: known_persons
+        agg: count_distinct
+        sql: resolved_person_id
+        description: Distinct resolved persons with pageviews.
+

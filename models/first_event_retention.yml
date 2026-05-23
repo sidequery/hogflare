@@ -1,0 +1,108 @@
+models:
+  - name: first_event_retention
+    sql: |
+      with event_base as (
+        select
+          distinct_id as actor_id,
+          date_trunc('day', coalesce(timestamp, created_at)) as event_day
+        from {{ events_table }}
+        where coalesce(timestamp, created_at) is not null
+      ),
+      cohorts as (
+        select
+          actor_id,
+          min(event_day) as cohort_day
+        from event_base
+        group by actor_id
+      ),
+      activity_days as (
+        select
+          actor_id,
+          event_day as activity_day
+        from event_base
+        group by actor_id, event_day
+      ),
+      cohort_sizes as (
+        select
+          cohort_day,
+          count(*) as cohort_size
+        from cohorts
+        group by cohort_day
+      ),
+      retained as (
+        select
+          cohorts.cohort_day,
+          activity_days.activity_day,
+          date_diff('day', cohorts.cohort_day, activity_days.activity_day) as period_day,
+          count(activity_days.actor_id) as active_users
+        from cohorts
+        join activity_days on cohorts.actor_id = activity_days.actor_id
+        where activity_days.activity_day >= cohorts.cohort_day
+        group by cohorts.cohort_day, activity_days.activity_day
+      )
+      select
+        cast(retained.cohort_day as varchar) || ':' || cast(retained.period_day as varchar) as retention_id,
+        retained.cohort_day,
+        retained.activity_day,
+        retained.period_day,
+        retained.active_users,
+        cohort_sizes.cohort_size,
+        cast(retained.active_users as double) / nullif(cohort_sizes.cohort_size, 0) as retention_rate
+      from retained
+      join cohort_sizes on retained.cohort_day = cohort_sizes.cohort_day
+      where retained.period_day between 0 and 30
+    description: Daily first-event retention, implemented with R2 SQL-supported grouping instead of SELECT DISTINCT.
+    primary_key: retention_id
+    default_time_dimension: cohort_day
+    default_grain: day
+
+    dimensions:
+      - name: retention_id
+        type: categorical
+      - name: period_day
+        type: numeric
+      - name: active_users
+        type: numeric
+      - name: cohort_size
+        type: numeric
+      - name: retention_rate
+        type: numeric
+      - name: cohort_day
+        type: time
+        granularity: day
+      - name: activity_day
+        type: time
+        granularity: day
+
+    metrics:
+      - name: cohort_users
+        agg: sum
+        sql: cohort_size
+        filters:
+          - period_day = 0
+        description: Users in the original cohort, counted once per cohort.
+      - name: day_0_users
+        agg: sum
+        sql: active_users
+        filters:
+          - period_day = 0
+        description: Active users on the cohort day.
+      - name: day_1_retained_users
+        agg: sum
+        sql: active_users
+        filters:
+          - period_day = 1
+        description: Active users one day after first event.
+      - name: day_7_retained_users
+        agg: sum
+        sql: active_users
+        filters:
+          - period_day = 7
+        description: Active users seven days after first event.
+      - name: day_30_retained_users
+        agg: sum
+        sql: active_users
+        filters:
+          - period_day = 30
+        description: Active users thirty days after first event.
+
