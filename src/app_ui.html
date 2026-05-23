@@ -1516,7 +1516,7 @@
               <input id="limit" name="limit" inputmode="numeric" value="100" />
             </div>
             <div class="actions">
-              <button class="button" id="submitButton" type="submit">Search</button>
+              <button class="button" id="submitButton" type="submit" data-section="replays">Search</button>
               <button class="button secondary" id="clear" type="button">Clear</button>
             </div>
           </form>
@@ -2187,7 +2187,10 @@
         ]) {
           button.setAttribute("aria-selected", mode === key ? "true" : "false");
         }
-        els.submitButton.textContent = state.section === "analytics" ? "Analyze" : "Search";
+        els.submitButton.textContent = "Search";
+        els.clear.textContent = state.section === "analytics" ? "Reset" : "Clear";
+        els.clear.classList.toggle("secondary", state.section !== "analytics");
+        els.clear.classList.toggle("subtle", state.section === "analytics");
         els.resultsLabel.textContent = modes[mode].label;
         els.resultControls.classList.toggle("is-hidden", state.section === "analytics");
         let hasModeOptions = false;
@@ -3679,6 +3682,7 @@
       els.copyLink.addEventListener("click", () => copyLink().catch(() => setStatus("copy failed")));
       els.debugToggle.addEventListener("click", () => els.debug.classList.toggle("is-open"));
       els.clear.addEventListener("click", () => {
+        const wasAnalytics = state.section === "analytics";
         cancelAnalyticsRequests();
         els.filters.reset();
         document.getElementById("limit").value = "100";
@@ -3698,12 +3702,16 @@
         state.selectedFriction = null;
         state.selectedPersonItem = null;
         state.sessionPayload = null;
-        renderResults();
-        renderFacts(null);
-        renderActivity([]);
-        setStatus("idle");
-        showMessage("empty", "Ready", "Load sessions, then select a recording to replay.");
-        replaceUrl(state.section === "analytics" ? analyticsPath : replayPath, new URLSearchParams());
+        if (wasAnalytics) {
+          requestAnalyticsSearch();
+        } else {
+          renderResults();
+          renderFacts(null);
+          renderActivity([]);
+          setStatus("idle");
+          showMessage("empty", "Ready", "Load sessions, then select a recording to replay.");
+          replaceUrl(replayPath, new URLSearchParams());
+        }
       });
 
       function bootFromUrl() {
