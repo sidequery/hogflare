@@ -2470,7 +2470,7 @@
         const query = params?.toString();
         const response = await fetch(query ? `${path}?${query}` : path, options);
         const body = await response.json();
-        if (!response.ok) throw new Error(body.error || "Replay request failed.");
+        if (!response.ok) throw new Error(body.error || "Request failed.");
         return body;
       }
 
@@ -3638,7 +3638,11 @@
           else await loadPerson();
         } catch (error) {
           setStatus("error");
-          showMessage("error", "Replay unavailable", error.message);
+          showMessage(
+            "error",
+            state.mode === "overview" ? "Analytics unavailable" : "Replay unavailable",
+            error.message,
+          );
         }
       }
 
