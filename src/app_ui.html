@@ -77,6 +77,7 @@
       .stage,
       .inspector {
         min-height: 0;
+        min-width: 0;
         background: var(--surface);
       }
 
@@ -95,6 +96,7 @@
 
       .stage {
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         grid-template-rows: auto minmax(0, 1fr);
         border-right: 1px solid var(--line);
       }
@@ -144,10 +146,19 @@
       .topbar {
         display: flex;
         align-items: center;
+        gap: 12px;
         justify-content: space-between;
       }
 
+      .topbar-primary {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 12px;
+      }
+
       .brand-mark {
+        flex: 0 0 auto;
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -210,8 +221,47 @@
         background: var(--accent);
       }
 
+      .status.is-loading::before {
+        width: 8px;
+        height: 8px;
+        border: 2px solid var(--line-strong);
+        border-top-color: var(--accent);
+        background: transparent;
+        animation: spin 700ms linear infinite;
+      }
+
       .status[hidden] {
         display: none !important;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .section-switch {
+        display: flex;
+        align-items: center;
+        min-width: 0;
+        gap: 2px;
+      }
+
+      .section-button {
+        height: 28px;
+        border: 0;
+        border-radius: 999px;
+        background: transparent;
+        color: var(--muted);
+        padding: 0 10px;
+        font-size: 12px;
+        font-weight: 720;
+        white-space: nowrap;
+      }
+
+      .section-button[aria-selected="true"] {
+        background: var(--ink);
+        color: var(--surface);
       }
 
       .mode-switch {
@@ -269,6 +319,62 @@
       .mode-panel {
         display: grid;
         gap: 8px;
+      }
+
+      .section-controls {
+        display: grid;
+        grid-column: 1 / -1;
+        gap: 10px;
+      }
+
+      .analytics-query-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 10px;
+      }
+
+      .semantic-filter-strip {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+
+      .semantic-filter-pill {
+        display: inline-flex;
+        align-items: center;
+        max-width: 100%;
+        gap: 5px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1;
+        padding: 5px 6px 5px 8px;
+      }
+
+      .semantic-filter-pill span {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .semantic-filter-pill button {
+        display: grid;
+        place-items: center;
+        width: 16px;
+        height: 16px;
+        border: 0;
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--muted);
+        cursor: pointer;
+        font: inherit;
+        padding: 0;
       }
 
       .select-row {
@@ -368,6 +474,12 @@
         font-weight: 680;
       }
 
+      .preset-button.is-selected {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+        color: var(--ink);
+      }
+
       .field {
         display: grid;
         min-width: 0;
@@ -379,6 +491,7 @@
       }
 
       .field input,
+      .field select,
       .date-field input {
         width: 100%;
         height: 34px;
@@ -392,6 +505,10 @@
         font-size: 12px;
       }
 
+      .field select {
+        cursor: pointer;
+      }
+
       .date-field input {
         padding-right: 6px;
       }
@@ -402,6 +519,7 @@
       }
 
       .field input:focus,
+      .field select:focus,
       .date-field input:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 2px var(--accent-soft);
@@ -440,6 +558,16 @@
         background: transparent;
         color: var(--muted);
         font-size: 11px;
+      }
+
+      .button:disabled,
+      .preset-button:disabled,
+      .mode-button:disabled,
+      .section-button:disabled,
+      .chip-button:disabled {
+        cursor: wait;
+        opacity: 0.56;
+        transform: none !important;
       }
 
       .sr-only {
@@ -646,12 +774,18 @@
 
       .player-wrap {
         min-height: 0;
+        min-width: 0;
+        width: 100%;
+        max-width: 100%;
         overflow: auto;
       }
 
       #player {
+        position: relative;
         min-height: 0;
+        min-width: 0;
         width: 100%;
+        max-width: 100%;
       }
 
       #player .rr-player {
@@ -686,6 +820,303 @@
 
       .error strong {
         color: var(--danger);
+      }
+
+      .chart-overview {
+        display: grid;
+        grid-template-rows: auto minmax(286px, 0.85fr) auto;
+        gap: 0;
+        min-height: 100%;
+        max-width: 100%;
+        overflow: auto;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        border-bottom: 1px solid var(--line);
+      }
+
+      .metric-card {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+        min-height: 58px;
+        appearance: none;
+        border: 0;
+        border-right: 1px solid var(--line);
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        padding: 9px 12px;
+        text-align: left;
+      }
+
+      .metric-card.is-skeleton {
+        cursor: default;
+        pointer-events: none;
+      }
+
+      .metric-card:last-child {
+        border-right: 0;
+      }
+
+      .metric-card:hover,
+      .metric-card.is-selected {
+        background: var(--surface-soft);
+      }
+
+      .metric-card.is-selected {
+        box-shadow: inset 0 -2px 0 var(--accent);
+      }
+
+      .metric-card:focus-visible,
+      .breakdown-row:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: -2px;
+      }
+
+      .metric-card span,
+      .chart-meta,
+      .chart-legend {
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .metric-card strong {
+        overflow: hidden;
+        font-family: var(--mono);
+        font-size: 16px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .metric-card code,
+      .chart-meta code {
+        display: block;
+        overflow: hidden;
+        max-width: 100%;
+        color: var(--faint);
+        font-family: var(--mono);
+        font-size: 10px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chart-panel {
+        display: grid;
+        position: relative;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-height: 0;
+        min-width: 0;
+        overflow: hidden;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .chart-panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: nowrap;
+        gap: 12px;
+        padding: 9px 12px 4px;
+      }
+
+      .chart-panel-head .label {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .chart-panel-head .chart-meta {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-align: right;
+      }
+
+      .chart-panel-head .chart-legend {
+        flex: 0 1 auto;
+        justify-content: flex-end;
+        min-width: 0;
+      }
+
+      .chart-canvas {
+        position: relative;
+        min-height: 230px;
+        padding: 2px 12px 10px;
+      }
+
+      .chart-svg {
+        display: block;
+        width: 100%;
+        height: 100%;
+        min-height: 220px;
+      }
+
+      .chart-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px 12px;
+      }
+
+      .legend-key {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .legend-swatch {
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--accent);
+      }
+
+      .breakdown-grid {
+        display: grid;
+        grid-auto-flow: dense;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        background: var(--surface);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .breakdown-list {
+        display: grid;
+        align-content: start;
+        gap: 0;
+        padding: 4px 0 12px;
+      }
+
+      .skeleton-line,
+      .skeleton-row::before,
+      .skeleton-row::after {
+        display: block;
+        border-radius: 2px;
+        background: linear-gradient(90deg, var(--surface-soft), #f8fafb, var(--surface-soft));
+        background-size: 220% 100%;
+        animation: skeleton-pulse 1.1s ease-in-out infinite;
+        content: "";
+      }
+
+      .skeleton-line {
+        height: 10px;
+      }
+
+      .skeleton-line.short {
+        width: 44%;
+      }
+
+      .skeleton-line.medium {
+        width: 68%;
+      }
+
+      .skeleton-line.long {
+        width: 86%;
+      }
+
+      .skeleton-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 42px;
+        gap: 12px;
+        align-items: center;
+        min-height: 28px;
+        padding: 6px 12px;
+      }
+
+      .skeleton-row::before {
+        width: var(--skeleton-width, 74%);
+        height: 11px;
+      }
+
+      .skeleton-row::after {
+        width: 34px;
+        height: 11px;
+        justify-self: end;
+      }
+
+      @keyframes skeleton-pulse {
+        to {
+          background-position: -220% 0;
+        }
+      }
+
+      .breakdown-grid .chart-panel {
+        border-left: 1px solid var(--line);
+        border-bottom: 0;
+        background: var(--surface);
+      }
+
+      .breakdown-grid .chart-panel:first-child {
+        grid-column: span 2;
+        border-left: 0;
+      }
+
+      .breakdown-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: center;
+        position: relative;
+        width: 100%;
+        appearance: none;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: inherit;
+        cursor: pointer;
+        font: inherit;
+        overflow: hidden;
+        padding: 4px 12px;
+        text-align: left;
+      }
+
+      .breakdown-row:hover {
+        background: #eef2ff;
+      }
+
+      .breakdown-row.is-selected {
+        background: rgb(15 23 42 / 8%);
+      }
+
+      .breakdown-row.is-other {
+        cursor: default;
+        color: var(--muted);
+      }
+
+      .breakdown-row.is-other:hover {
+        background: transparent;
+      }
+
+      .breakdown-row::before {
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: var(--bar-width, 0%);
+        background: rgba(107, 124, 255, 0.12);
+        content: "";
+      }
+
+      .breakdown-label {
+        position: relative;
+        z-index: 1;
+        overflow: hidden;
+        min-width: 0;
+        font-size: 11px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .breakdown-value {
+        position: relative;
+        z-index: 1;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 650;
+        text-align: right;
       }
 
       .facts {
@@ -753,6 +1184,20 @@
         color: var(--ink);
         padding: 9px 12px;
         text-align: left;
+      }
+
+      .context-row {
+        grid-template-columns: 78px minmax(0, 1fr);
+        cursor: default;
+      }
+
+      @media (hover: hover) {
+        .context-row:hover {
+          background: transparent;
+          border-color: var(--line);
+          color: var(--ink);
+          transform: none;
+        }
       }
 
       .timeline-time {
@@ -876,6 +1321,15 @@
           display: flex;
           width: 100%;
         }
+
+        .metric-grid,
+        .breakdown-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .breakdown-grid .chart-panel:first-child {
+          grid-column: span 1;
+        }
       }
     </style>
   </head>
@@ -884,56 +1338,47 @@
       <aside class="rail" id="rail">
         <div class="rail-content" id="railContent">
           <header class="topbar">
-            <span class="brand-mark" aria-label="Hogflare" role="img">
-              <svg viewBox="0 0 64 72" aria-hidden="true" fill="none" stroke="currentColor">
-                <path
-                  d="M12 54c-5-10-4-28 5-39C24 6 38 5 48 13c8 7 11 20 7 31-3 10-11 17-23 17-9 0-16-2-20-7Z"
-                  stroke-width="4"
-                  stroke-linejoin="round"
-                />
-                <path d="M19 18 13 8M29 12 27 3M42 14 45 5" stroke-width="4" stroke-linecap="round" />
-                <path d="M24 25c-4-3-9-2-11 3M43 25c4-4 10-3 12 2" stroke-width="4" stroke-linecap="round" />
-                <path
-                  d="M23 42c3-5 15-6 20-1 3 3 2 8-2 11-6 4-17 3-21-1-3-3-1-7 3-9Z"
-                  stroke-width="4"
-                  stroke-linejoin="round"
-                />
-                <path d="M27 44v5M37 44v5" stroke-width="4" stroke-linecap="round" />
-                <path d="M24 35h.1M42 35h.1" stroke-width="5" stroke-linecap="round" />
-                <path d="M16 60v6M45 59v7" stroke-width="4" stroke-linecap="round" />
-              </svg>
-            </span>
+            <div class="topbar-primary">
+              <span class="brand-mark" aria-label="Hogflare" role="img">
+                <svg viewBox="0 0 64 72" aria-hidden="true" fill="none" stroke="currentColor">
+                  <path
+                    d="M12 54c-5-10-4-28 5-39C24 6 38 5 48 13c8 7 11 20 7 31-3 10-11 17-23 17-9 0-16-2-20-7Z"
+                    stroke-width="4"
+                    stroke-linejoin="round"
+                  />
+                  <path d="M19 18 13 8M29 12 27 3M42 14 45 5" stroke-width="4" stroke-linecap="round" />
+                  <path d="M24 25c-4-3-9-2-11 3M43 25c4-4 10-3 12 2" stroke-width="4" stroke-linecap="round" />
+                  <path
+                    d="M23 42c3-5 15-6 20-1 3 3 2 8-2 11-6 4-17 3-21-1-3-3-1-7 3-9Z"
+                    stroke-width="4"
+                    stroke-linejoin="round"
+                  />
+                  <path d="M27 44v5M37 44v5" stroke-width="4" stroke-linecap="round" />
+                  <path d="M24 35h.1M42 35h.1" stroke-width="5" stroke-linecap="round" />
+                  <path d="M16 60v6M45 59v7" stroke-width="4" stroke-linecap="round" />
+                </svg>
+              </span>
+              <nav class="section-switch" aria-label="Viewer section">
+                <button class="section-button" id="analyticsSection" type="button" aria-selected="true">
+                  Analytics
+                </button>
+                <button class="section-button" id="replaySection" type="button" aria-selected="false">
+                  Replays
+                </button>
+              </nav>
+            </div>
             <span class="status" id="status" hidden>idle</span>
           </header>
 
           <section class="rail-body">
           <form class="filters" id="filters">
-            <div class="field wide">
-              <label class="label" for="apiKey">API key</label>
-              <input id="apiKey" name="api_key" autocomplete="off" placeholder="phc_..." />
-            </div>
-            <div class="field">
-              <label class="label" for="distinctId">Distinct ID</label>
-              <input id="distinctId" name="distinct_id" autocomplete="off" placeholder="user_123" />
-            </div>
-            <div class="field">
-              <label class="label" for="sessionId">Session ID</label>
-              <input id="sessionId" name="session_id" autocomplete="off" placeholder="$session_id" />
-            </div>
-            <div class="field wide">
-              <label class="label" for="url">URL contains</label>
-              <input id="url" name="url" autocomplete="off" placeholder="/checkout" />
-            </div>
-            <div class="field wide">
-              <label class="label" for="eventName">Event name</label>
-              <input id="eventName" name="event_name" autocomplete="off" placeholder="Product Viewed" />
-            </div>
             <div class="date-range" role="group" aria-labelledby="dateRangeLabel">
               <span class="label date-range-label" id="dateRangeLabel">Date range</span>
               <div class="date-presets" aria-label="Date range presets">
                 <button class="preset-button" type="button" data-date-preset="today">Today</button>
                 <button class="preset-button" type="button" data-date-preset="24h">Last 24h</button>
                 <button class="preset-button" type="button" data-date-preset="7d">Last 7d</button>
+                <button class="preset-button" type="button" data-date-preset="30d">Last 30d</button>
                 <button class="preset-button" type="button" data-date-preset="clear">Clear dates</button>
               </div>
               <div class="date-inputs">
@@ -947,23 +1392,126 @@
                 </label>
               </div>
             </div>
-            <div class="field">
+            <div class="field" data-section="replays">
+              <label class="label" for="distinctId">Distinct ID</label>
+              <input id="distinctId" name="distinct_id" autocomplete="off" placeholder="user_123" />
+            </div>
+            <div class="field" data-section="replays">
+              <label class="label" for="sessionId">Session ID</label>
+              <input id="sessionId" name="session_id" autocomplete="off" placeholder="$session_id" />
+            </div>
+            <div class="field wide">
+              <label class="label" for="url">URL contains</label>
+              <input id="url" name="url" autocomplete="off" placeholder="/checkout" />
+            </div>
+            <div class="field wide">
+              <label class="label" for="eventName">Event name</label>
+              <input id="eventName" name="event_name" autocomplete="off" placeholder="Product Viewed" />
+            </div>
+            <div class="section-controls" data-section="analytics">
+              <div class="analytics-query-grid">
+                <div class="field wide">
+                  <label class="label" for="metric">Metric</label>
+                  <select id="metric" name="metric">
+                    <optgroup label="Events">
+                      <option value="events.event_count">Events</option>
+                      <option value="events.unique_users">Users</option>
+                      <option value="events.snapshot_events">Replay chunks</option>
+                    </optgroup>
+                    <optgroup label="Pageviews">
+                      <option value="pageviews.pageviews">Pageviews</option>
+                    </optgroup>
+                    <optgroup label="Sessions">
+                      <option value="sessions.session_count">SDK sessions</option>
+                      <option value="sessions.average_session_seconds">Avg session</option>
+                    </optgroup>
+                  </select>
+                </div>
+                <div class="field wide">
+                  <label class="label" for="dimension">Breakdown</label>
+                  <select id="dimension" name="dimension">
+                    <optgroup label="Events">
+                      <option value="events.event_type" data-model="events">Event</option>
+                      <option value="events.browser" data-model="events">Browser</option>
+                      <option value="events.os" data-model="events">OS</option>
+                      <option value="events.device_type" data-model="events">Device</option>
+                      <option value="events.host" data-model="events">Host</option>
+                      <option value="events.referrer_domain" data-model="events">Referring domain</option>
+                      <option value="events.referrer" data-model="events">Referrer</option>
+                      <option value="events.geo_country_code" data-model="events">Country</option>
+                      <option value="events.geo_region" data-model="events">Region</option>
+                      <option value="events.geo_city" data-model="events">City</option>
+                      <option value="events.geo_timezone" data-model="events">Timezone</option>
+                      <option value="events.cf_asn" data-model="events">ASN</option>
+                      <option value="events.utm_source" data-model="events">UTM source</option>
+                      <option value="events.utm_campaign" data-model="events">UTM campaign</option>
+                    </optgroup>
+                    <optgroup label="Pageviews">
+                      <option value="pageviews.pathname" data-model="pageviews">Path</option>
+                      <option value="pageviews.host" data-model="pageviews">Host</option>
+                      <option value="pageviews.referrer_domain" data-model="pageviews">Referring domain</option>
+                      <option value="pageviews.referrer" data-model="pageviews">Referrer</option>
+                      <option value="pageviews.browser" data-model="pageviews">Browser</option>
+                      <option value="pageviews.os" data-model="pageviews">OS</option>
+                      <option value="pageviews.device_type" data-model="pageviews">Device</option>
+                      <option value="pageviews.geo_country_code" data-model="pageviews">Country</option>
+                      <option value="pageviews.geo_region" data-model="pageviews">Region</option>
+                      <option value="pageviews.geo_city" data-model="pageviews">City</option>
+                      <option value="pageviews.geo_timezone" data-model="pageviews">Timezone</option>
+                      <option value="pageviews.cf_asn" data-model="pageviews">ASN</option>
+                      <option value="pageviews.utm_source" data-model="pageviews">UTM source</option>
+                      <option value="pageviews.utm_campaign" data-model="pageviews">UTM campaign</option>
+                    </optgroup>
+                    <optgroup label="Sessions">
+                      <option value="sessions.landing_path" data-model="sessions">Landing path</option>
+                      <option value="sessions.browser" data-model="sessions">Browser</option>
+                      <option value="sessions.os" data-model="sessions">OS</option>
+                      <option value="sessions.device_type" data-model="sessions">Device</option>
+                      <option value="sessions.referrer_domain" data-model="sessions">Referring domain</option>
+                      <option value="sessions.referrer" data-model="sessions">Referrer</option>
+                      <option value="sessions.geo_country_code" data-model="sessions">Country</option>
+                      <option value="sessions.geo_region" data-model="sessions">Region</option>
+                      <option value="sessions.geo_city" data-model="sessions">City</option>
+                      <option value="sessions.geo_timezone" data-model="sessions">Timezone</option>
+                      <option value="sessions.cf_asn" data-model="sessions">ASN</option>
+                      <option value="sessions.utm_source" data-model="sessions">UTM source</option>
+                    </optgroup>
+                  </select>
+                </div>
+                <div class="field wide">
+                  <label class="label" for="granularity">Trend grain</label>
+                  <select id="granularity" name="granularity">
+                    <option value="day">Day</option>
+                    <option value="week">Week</option>
+                    <option value="month">Month</option>
+                  </select>
+                </div>
+              </div>
+              <input id="semanticFilters" name="semantic_filters" type="hidden" />
+              <div
+                class="semantic-filter-strip is-hidden"
+                id="semanticFilterStrip"
+                data-testid="analytics-filter-pills"
+                aria-label="Active analytics filters"
+              ></div>
+            </div>
+            <div class="field" data-section="replays">
               <label class="label" for="minDuration">Min duration</label>
               <input id="minDuration" name="min_duration_secs" inputmode="numeric" placeholder="sec" />
             </div>
-            <div class="field">
+            <div class="field" data-section="replays">
               <label class="label" for="maxDuration">Max duration</label>
               <input id="maxDuration" name="max_duration_secs" inputmode="numeric" placeholder="sec" />
             </div>
-            <div class="field">
+            <div class="field" data-section="replays">
               <label class="label" for="minEvents">Min events</label>
               <input id="minEvents" name="min_events" inputmode="numeric" placeholder="count" />
             </div>
-            <div class="field">
+            <div class="field" data-section="replays">
               <label class="label" for="maxEvents">Max events</label>
               <input id="maxEvents" name="max_events" inputmode="numeric" placeholder="count" />
             </div>
-            <div class="field wide">
+            <div class="field wide" data-section="replays">
               <label class="label" for="limit">Limit</label>
               <input id="limit" name="limit" inputmode="numeric" value="100" />
             </div>
@@ -973,7 +1521,7 @@
             </div>
           </form>
 
-          <section class="result-controls" aria-label="Replay result controls">
+          <section class="result-controls" id="resultControls" aria-label="Replay result controls">
             <nav class="mode-switch" aria-label="Replay result type">
               <button class="mode-button" id="sessionMode" type="button" aria-selected="true">
                 Sessions
@@ -1026,7 +1574,7 @@
             </div>
           </section>
 
-          <div class="results-pane">
+          <div class="results-pane" id="resultsPane">
             <div class="results-head">
               <span class="label" id="resultsLabel">Recent sessions</span>
               <span class="count" id="resultCount">0</span>
@@ -1082,7 +1630,7 @@
         <header class="stage-head">
           <div class="stage-title">
             <strong id="activeTitle">No session selected</strong>
-            <span id="activeSubtitle">Search replay sessions or choose an analytics event.</span>
+            <span id="activeSubtitle">Search replay sessions or choose an event.</span>
           </div>
           <div class="actions">
             <button class="button secondary" id="copyLink" type="button">Copy link</button>
@@ -1102,31 +1650,31 @@
       <aside class="inspector" id="inspector">
         <div class="inspector-content" id="inspectorContent">
           <header class="inspector-head">
-            <h2>Session context</h2>
+            <h2 id="inspectorTitle">Session context</h2>
           </header>
           <section class="facts" aria-label="Session facts">
             <div class="fact">
-              <span>User</span>
+              <span id="detailDistinctLabel">User</span>
               <strong id="detailDistinct">-</strong>
             </div>
             <div class="fact">
-              <span>API key</span>
-              <strong id="detailApiKey">-</strong>
+              <span id="detailSecondaryLabel">First seen</span>
+              <strong id="detailSecondary">-</strong>
             </div>
             <div class="fact">
-              <span>Duration</span>
+              <span id="detailDurationLabel">Duration</span>
               <strong id="detailDuration">-</strong>
             </div>
             <div class="fact">
-              <span>Events</span>
+              <span id="detailEventsLabel">Events</span>
               <strong id="detailEvents">-</strong>
             </div>
             <div class="fact">
-              <span>Chunks</span>
+              <span id="detailChunksLabel">Chunks</span>
               <strong id="detailChunks">-</strong>
             </div>
             <div class="fact">
-              <span>First URL</span>
+              <span id="detailUrlLabel">First URL</span>
               <strong id="detailUrl">-</strong>
             </div>
           </section>
@@ -1191,15 +1739,23 @@
         app: document.getElementById("app"),
         filters: document.getElementById("filters"),
         status: document.getElementById("status"),
+        replaySection: document.getElementById("replaySection"),
+        analyticsSection: document.getElementById("analyticsSection"),
         sessionMode: document.getElementById("sessionMode"),
         eventMode: document.getElementById("eventMode"),
         funnelMode: document.getElementById("funnelMode"),
         frictionMode: document.getElementById("frictionMode"),
         personMode: document.getElementById("personMode"),
+        resultControls: document.getElementById("resultControls"),
         modeOptions: document.getElementById("modeOptions"),
         funnelStepControls: document.getElementById("funnelStepControls"),
         signalChoices: document.getElementById("signalChoices"),
         datePresets: document.querySelector(".date-presets"),
+        metric: document.getElementById("metric"),
+        dimension: document.getElementById("dimension"),
+        granularity: document.getElementById("granularity"),
+        semanticFilters: document.getElementById("semanticFilters"),
+        semanticFilterStrip: document.getElementById("semanticFilterStrip"),
         submitButton: document.getElementById("submitButton"),
         clear: document.getElementById("clear"),
         reload: document.getElementById("reload"),
@@ -1208,12 +1764,20 @@
         copyLink: document.getElementById("copyLink"),
         resultsLabel: document.getElementById("resultsLabel"),
         resultCount: document.getElementById("resultCount"),
+        resultsPane: document.getElementById("resultsPane"),
         results: document.getElementById("results"),
         player: document.getElementById("player"),
         activeTitle: document.getElementById("activeTitle"),
         activeSubtitle: document.getElementById("activeSubtitle"),
+        inspectorTitle: document.getElementById("inspectorTitle"),
+        detailDistinctLabel: document.getElementById("detailDistinctLabel"),
+        detailSecondaryLabel: document.getElementById("detailSecondaryLabel"),
+        detailDurationLabel: document.getElementById("detailDurationLabel"),
+        detailEventsLabel: document.getElementById("detailEventsLabel"),
+        detailChunksLabel: document.getElementById("detailChunksLabel"),
+        detailUrlLabel: document.getElementById("detailUrlLabel"),
         detailDistinct: document.getElementById("detailDistinct"),
-        detailApiKey: document.getElementById("detailApiKey"),
+        detailSecondary: document.getElementById("detailSecondary"),
         detailDuration: document.getElementById("detailDuration"),
         detailEvents: document.getElementById("detailEvents"),
         detailChunks: document.getElementById("detailChunks"),
@@ -1227,7 +1791,10 @@
       };
 
       const state = {
-        mode: "sessions",
+        mode: "overview",
+        section: "analytics",
+        lastReplayMode: "sessions",
+        charts: null,
         sessions: [],
         events: [],
         funnels: [],
@@ -1245,6 +1812,10 @@
         playerWidth: 0,
         playerHeight: 0,
         playerResizeTimer: null,
+        chartResizeTimer: null,
+        analyticsRequestId: 0,
+        analyticsLoading: false,
+        analyticsPendingPanels: new Set(),
         railCollapsed: false,
         inspectorCollapsed: false,
       };
@@ -1252,11 +1823,54 @@
       const playerControllerHeight = 80;
 
       const modes = {
+        overview: { label: "Product analytics" },
         sessions: { label: "Recent sessions" },
-        events: { label: "Analytics events" },
+        events: { label: "Events" },
         funnels: { label: "Funnel replay" },
         friction: { label: "Friction signals" },
         person: { label: "Person journey" },
+      };
+
+      const analyticsMetricModels = {
+        "events.event_count": "events",
+        "events.unique_users": "events",
+        "events.snapshot_events": "events",
+        "pageviews.pageviews": "pageviews",
+        "sessions.session_count": "sessions",
+        "sessions.average_session_seconds": "sessions",
+      };
+
+      const analyticsDefaultDimensions = {
+        events: "events.event_type",
+        pageviews: "pageviews.pathname",
+        sessions: "sessions.landing_path",
+      };
+      const analyticsBreakdownLimit = 10;
+
+      const analyticsPanelOrder = [
+        "top_events",
+        "top_pages",
+        "domains",
+        "referring_domains",
+        "referrers",
+        "browsers",
+        "countries",
+        "regions",
+        "cities",
+        "summary",
+        "series",
+        "focus_breakdown",
+      ];
+      const analyticsBuiltInBreakdownPanels = {
+        "events.event_type": "top_events",
+        "pageviews.pathname": "top_pages",
+        "pageviews.host": "domains",
+        "pageviews.referrer_domain": "referring_domains",
+        "pageviews.referrer": "referrers",
+        "events.browser": "browsers",
+        "events.geo_country_code": "countries",
+        "events.geo_region": "regions",
+        "events.geo_city": "cities",
       };
 
       const funnelEventOptions = [
@@ -1269,6 +1883,8 @@
         "Demo Requested",
       ];
       const defaultFunnelSteps = ["Viewed Pricing", "Checkout Started", ""];
+      const analyticsPath = "/analytics";
+      const replayPath = "/replay";
 
       function paramsFromForm(options = {}) {
         const params = new URLSearchParams();
@@ -1297,13 +1913,24 @@
 
       function skippedFields(mode) {
         const durationFields = ["min_duration_secs", "max_duration_secs", "min_events", "max_events"];
+        const replayIdentityFields = ["distinct_id", "session_id"];
+        const analyticsFields = ["metric", "dimension", "granularity", "semantic_filters"];
         const byMode = {
-          sessions: ["steps", "signal"],
-          events: [...durationFields, "steps", "signal"],
-          funnels: [...durationFields, "event_name", "signal"],
-          friction: ["event_name", "steps"],
-          person: [...durationFields, "steps", "signal"],
-          sessionLoad: ["session_id", "url", "event_name", "steps", "signal", ...durationFields],
+          overview: [...durationFields, ...replayIdentityFields, "limit", "steps", "signal"],
+          sessions: [...analyticsFields, "steps", "signal"],
+          events: [...analyticsFields, ...durationFields, "steps", "signal"],
+          funnels: [...analyticsFields, ...durationFields, "event_name", "signal"],
+          friction: [...analyticsFields, "event_name", "steps"],
+          person: [...analyticsFields, ...durationFields, "steps", "signal"],
+          sessionLoad: [
+            ...analyticsFields,
+            "session_id",
+            "url",
+            "event_name",
+            "steps",
+            "signal",
+            ...durationFields,
+          ],
         };
         return new Set(byMode[mode] || []);
       }
@@ -1332,7 +1959,8 @@
       function applyDatePreset(preset) {
         if (preset === "clear") {
           setDateRange(null, null);
-          runSearch();
+          setDatePresetState("clear");
+          requestSearchForCurrentMode();
           return;
         }
         const to = new Date();
@@ -1343,16 +1971,40 @@
           from.setDate(from.getDate() - 1);
         } else if (preset === "7d") {
           from.setDate(from.getDate() - 7);
+        } else if (preset === "30d") {
+          from.setDate(from.getDate() - 30);
         } else {
           return;
         }
         setDateRange(from, to);
-        runSearch();
+        setDatePresetState(preset);
+        requestSearchForCurrentMode();
       }
 
-      function setStatus(text, ok = false) {
+      function setDatePresetState(preset) {
+        for (const button of els.datePresets.querySelectorAll("[data-date-preset]")) {
+          button.classList.toggle("is-selected", button.dataset.datePreset === preset);
+        }
+      }
+
+      function setStatus(text, ok = false, loading = false) {
+        els.status.hidden = false;
+        els.status.removeAttribute("hidden");
         els.status.textContent = text;
         els.status.classList.toggle("is-ok", ok);
+        els.status.classList.toggle("is-loading", loading);
+      }
+
+      function clearStatus() {
+        els.status.hidden = true;
+        els.status.textContent = "";
+        els.status.classList.remove("is-ok", "is-loading");
+      }
+
+      function setAnalyticsLoading(loading) {
+        state.analyticsLoading = loading;
+        els.player.classList.toggle("is-loading", loading);
+        els.player.toggleAttribute("aria-busy", loading);
       }
 
       function initModeControls() {
@@ -1377,6 +2029,110 @@
           button.addEventListener("click", () => setSignal(button.dataset.signal || "", { search: true }));
         }
         setSignal("");
+      }
+
+      function initAnalyticsControls() {
+        for (const select of [els.metric, els.dimension, els.granularity]) {
+          select.addEventListener("change", () => {
+            if (select === els.metric) syncAnalyticsDimensions();
+            if (state.mode === "overview") requestAnalyticsSearch();
+          });
+        }
+        syncAnalyticsDimensions();
+        renderSemanticFilters();
+      }
+
+      function syncAnalyticsDimensions() {
+        const model = analyticsMetricModels[els.metric.value] || "events";
+        const defaultDimension = analyticsDefaultDimensions[model];
+        let selectedStillValid = false;
+        for (const option of els.dimension.options) {
+          const enabled = !option.dataset.model || option.dataset.model === model;
+          option.disabled = !enabled;
+          option.hidden = !enabled;
+          if (enabled && option.value === els.dimension.value) selectedStillValid = true;
+        }
+        if (!selectedStillValid) els.dimension.value = defaultDimension;
+      }
+
+      function semanticFilters() {
+        try {
+          const parsed = JSON.parse(els.semanticFilters.value || "{}");
+          return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+        } catch (_) {
+          return {};
+        }
+      }
+
+      function writeSemanticFilters(filters) {
+        const normalized = {};
+        for (const [dimension, values] of Object.entries(filters || {})) {
+          const cleanValues = [...new Set((Array.isArray(values) ? values : [values]).map(normalizeFilterValue).filter(Boolean))];
+          if (cleanValues.length) normalized[dimension] = cleanValues;
+        }
+        els.semanticFilters.value = Object.keys(normalized).length ? JSON.stringify(normalized) : "";
+        renderSemanticFilters();
+      }
+
+      function normalizeFilterValue(value) {
+        return String(value ?? "").trim();
+      }
+
+      function toggleSemanticFilter(dimension, value) {
+        const normalizedValue = normalizeFilterValue(value);
+        if (!dimension || !normalizedValue) return;
+        const filters = semanticFilters();
+        const selected = new Set((filters[dimension] || []).map(normalizeFilterValue));
+        if (selected.has(normalizedValue)) selected.delete(normalizedValue);
+        else selected.add(normalizedValue);
+        if (selected.size) filters[dimension] = [...selected];
+        else delete filters[dimension];
+        writeSemanticFilters(filters);
+        if (state.mode === "overview") requestAnalyticsSearch();
+      }
+
+      function removeSemanticFilter(dimension, value) {
+        const normalizedValue = normalizeFilterValue(value);
+        const filters = semanticFilters();
+        const values = (filters[dimension] || []).map(normalizeFilterValue).filter((item) => item !== normalizedValue);
+        if (values.length) filters[dimension] = values;
+        else delete filters[dimension];
+        writeSemanticFilters(filters);
+        if (state.mode === "overview") requestAnalyticsSearch();
+      }
+
+      function isSemanticFilterSelected(dimension, value) {
+        const normalizedValue = normalizeFilterValue(value);
+        return (semanticFilters()[dimension] || []).map(normalizeFilterValue).includes(normalizedValue);
+      }
+
+      function renderSemanticFilters() {
+        const filters = semanticFilters();
+        els.semanticFilterStrip.innerHTML = "";
+        const entries = Object.entries(filters).flatMap(([dimension, values]) =>
+          (values || []).map((value) => ({ dimension, value: normalizeFilterValue(value) })).filter((item) => item.value),
+        );
+        els.semanticFilterStrip.classList.toggle("is-hidden", !entries.length);
+        for (const item of entries) {
+          const pill = document.createElement("span");
+          pill.className = "semantic-filter-pill";
+          pill.dataset.dimension = item.dimension;
+          pill.dataset.value = item.value;
+          const label = document.createElement("span");
+          label.textContent = `${semanticFilterLabel(item.dimension)}: ${item.value}`;
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = "×";
+          button.setAttribute("aria-label", `Remove ${item.value}`);
+          button.addEventListener("click", () => removeSemanticFilter(item.dimension, item.value));
+          pill.append(label, button);
+          els.semanticFilterStrip.appendChild(pill);
+        }
+      }
+
+      function semanticFilterLabel(dimension) {
+        const option = Array.from(els.dimension.options).find((candidate) => candidate.value === dimension);
+        return option?.textContent || dimension;
       }
 
       function updateStepsFromControls() {
@@ -1416,7 +2172,12 @@
       }
 
       function setMode(mode) {
+        if (mode !== "overview") cancelAnalyticsRequests();
         state.mode = mode;
+        state.section = mode === "overview" ? "analytics" : "replays";
+        if (state.section === "replays") state.lastReplayMode = mode;
+        syncSectionControls();
+        renderSemanticFilters();
         for (const [key, button] of [
           ["sessions", els.sessionMode],
           ["events", els.eventMode],
@@ -1426,8 +2187,9 @@
         ]) {
           button.setAttribute("aria-selected", mode === key ? "true" : "false");
         }
-        els.submitButton.textContent = "Search";
+        els.submitButton.textContent = state.section === "analytics" ? "Analyze" : "Search";
         els.resultsLabel.textContent = modes[mode].label;
+        els.resultControls.classList.toggle("is-hidden", state.section === "analytics");
         let hasModeOptions = false;
         for (const field of document.querySelectorAll(".mode-field")) {
           const enabled = field.dataset.modes.split(" ").includes(mode);
@@ -1436,6 +2198,17 @@
         }
         els.modeOptions.classList.toggle("is-hidden", !hasModeOptions);
         renderResults();
+      }
+
+      function syncSectionControls() {
+        const analyticsSelected = state.mode === "overview";
+        state.section = analyticsSelected ? "analytics" : "replays";
+        els.replaySection.setAttribute("aria-selected", analyticsSelected ? "false" : "true");
+        els.analyticsSection.setAttribute("aria-selected", analyticsSelected ? "true" : "false");
+        els.resultsPane.classList.toggle("is-hidden", analyticsSelected);
+        for (const field of document.querySelectorAll("[data-section]")) {
+          field.classList.toggle("is-hidden", field.dataset.section !== state.section);
+        }
       }
 
       function formatTime(value) {
@@ -1484,6 +2257,10 @@
 
       function renderResults() {
         els.results.innerHTML = "";
+        if (state.mode === "overview") {
+          els.resultCount.textContent = "0";
+          return;
+        }
         const items = resultItems();
         els.resultCount.textContent = String(items.length);
         for (const item of items) {
@@ -1500,11 +2277,30 @@
       }
 
       function resultRow(item) {
+        if (state.mode === "overview") return chartMetricRow(item);
         if (state.mode === "events") return eventRow(item);
         if (state.mode === "funnels") return funnelRow(item);
         if (state.mode === "friction") return frictionRow(item);
         if (state.mode === "person") return personRow(item);
         return sessionRow(item);
+      }
+
+      function chartMetricRow(metric) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "row-button";
+        row.addEventListener("click", () => renderChartContext(metric));
+
+        const title = document.createElement("div");
+        title.className = "row-title";
+        title.textContent = metric.label;
+
+        const meta = document.createElement("div");
+        meta.className = "row-meta";
+        meta.append(textNode(metric.display_value), textNode(metric.semantic_ref));
+
+        row.append(title, meta);
+        return row;
       }
 
       function sessionRow(session) {
@@ -1632,12 +2428,105 @@
         return span;
       }
 
-      async function requestJson(path, params) {
+      function replaceUrl(path, params) {
+        const query = params.toString();
+        history.replaceState(null, "", query ? `${path}?${query}` : path);
+      }
+
+      function replaceAnalyticsUrlFromForm() {
+        const params = paramsFromForm({ mode: "overview" });
+        replaceUrl(analyticsPath, params);
+        return params;
+      }
+
+      function replaceReplayUrlFromForm(mode = state.mode) {
+        const params = paramsFromForm({ mode });
+        if (mode && mode !== "sessions") params.set("mode", mode);
+        replaceUrl(replayPath, params);
+        return params;
+      }
+
+      function requestSearchForCurrentMode() {
+        if (state.mode === "overview") requestAnalyticsSearch();
+        else {
+          replaceReplayUrlFromForm();
+          runSearch();
+        }
+      }
+
+      function requestAnalyticsSearch() {
+        if (state.mode !== "overview") {
+          runSearch();
+          return;
+        }
+        replaceAnalyticsUrlFromForm();
+        runSearch();
+      }
+
+      async function requestJson(path, params, options = {}) {
         const query = params?.toString();
-        const response = await fetch(query ? `${path}?${query}` : path);
+        const response = await fetch(query ? `${path}?${query}` : path, options);
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || "Replay request failed.");
         return body;
+      }
+
+      function cancelAnalyticsRequests() {
+        state.analyticsRequestId += 1;
+        state.analyticsPendingPanels.clear();
+        setAnalyticsLoading(false);
+      }
+
+      async function loadCharts() {
+        const requestId = ++state.analyticsRequestId;
+        const params = paramsFromForm({ mode: "overview" });
+        const panels = analyticsPanelsForCurrentQuery();
+        state.analyticsPendingPanels = new Set(panels);
+        clearStatus();
+        setAnalyticsLoading(true);
+        try {
+          state.mode = "overview";
+          syncSectionControls();
+          state.charts = analyticsShellFromForm();
+          state.selectedSession = null;
+          state.sessionPayload = null;
+          renderResults();
+          renderCharts(state.charts);
+          renderChartContext();
+          replaceUrl(analyticsPath, params);
+          let failures = 0;
+          await Promise.all(
+            panels.map(async (panel) => {
+              const panelParams = new URLSearchParams(params);
+              panelParams.set("panel", panel);
+              try {
+                const body = await requestJson("/analytics/api/charts", panelParams);
+                if (requestId !== state.analyticsRequestId) return;
+                mergeAnalyticsPanel(panel, body);
+              } catch (error) {
+                if (error?.name === "AbortError" || requestId !== state.analyticsRequestId) return;
+                failures += 1;
+              } finally {
+                if (requestId === state.analyticsRequestId) {
+                  state.analyticsPendingPanels.delete(panel);
+                  renderCharts(state.charts);
+                  renderChartContext();
+                }
+              }
+            }),
+          );
+          if (requestId !== state.analyticsRequestId) return;
+          if (failures === panels.length) throw new Error("Analytics panels failed to load.");
+          if (failures) setStatus(`${failures} analytics panels failed`);
+          else clearStatus();
+        } finally {
+          if (requestId === state.analyticsRequestId) {
+            setAnalyticsLoading(false);
+            state.analyticsPendingPanels.clear();
+            renderAnalyticsFacts(state.charts);
+            renderChartContext();
+          }
+        }
       }
 
       async function loadSessions(options = {}) {
@@ -1724,7 +2613,7 @@
         await loadSessions({ silent: true, keepSelection: true });
         const match = state.sessions.find((session) => session.session_id === event.session_id) || state.sessions[0];
         if (!match) {
-          showMessage("empty", "No recording", "No replay session matched this analytics event.");
+          showMessage("empty", "No recording", "No replay session matched this event.");
           return;
         }
         await loadSession(match.session_id, anchorForEvent(event, match));
@@ -1791,17 +2680,558 @@
         return Math.max(0, eventAt - sessionStart);
       }
 
+      function analyticsShellFromForm() {
+        const focus = analyticsFocusFromCurrentForm();
+        return {
+          focus: {
+            ...focus,
+            metric_label: analyticsMetricLabel(focus.metric),
+            dimension_label: analyticsDimensionLabel(focus.dimension),
+          },
+          summary: state.charts?.summary || [],
+          series: [],
+          breakdowns: [],
+        };
+      }
+
+      function analyticsPanelsForCurrentQuery() {
+        const focus = analyticsFocusFromCurrentForm();
+        return analyticsPanelOrder.filter((panel) => {
+          if (panel !== "focus_breakdown") return true;
+          if (analyticsBuiltInBreakdownPanels[focus.dimension]) return false;
+          const dimensionName = focus.dimension.split(".").at(-1);
+          return !["geo_country_code", "geo_region", "geo_city"].includes(dimensionName);
+        });
+      }
+
+      function mergeAnalyticsPanel(panel, body) {
+        if (!state.charts) state.charts = analyticsShellFromForm();
+        if (body?.focus) state.charts.focus = body.focus;
+        if (panel === "summary") state.charts.summary = body?.summary || [];
+        if (panel === "series") state.charts.series = body?.series || [];
+        for (const breakdown of body?.breakdowns || []) {
+          breakdown.panel_key = panel;
+          const existingIndex = state.charts.breakdowns.findIndex((item) => sameChartBreakdown(item, breakdown));
+          if (existingIndex >= 0) state.charts.breakdowns[existingIndex] = breakdown;
+          else state.charts.breakdowns.push(breakdown);
+        }
+        state.charts.breakdowns.sort(
+          (left, right) => chartBreakdownOrder(left) - chartBreakdownOrder(right),
+        );
+      }
+
+      function sameChartBreakdown(left, right) {
+        if (left?.panel_key || right?.panel_key) return left?.panel_key === right?.panel_key;
+        return left?.model === right?.model && left?.dimension === right?.dimension && left?.metric === right?.metric;
+      }
+
+      function chartBreakdownOrder(breakdown) {
+        const panelIndex = analyticsPanelOrder.indexOf(breakdown?.panel_key);
+        if (panelIndex >= 0) return panelIndex;
+        const key = `${breakdown?.model}.${breakdown?.dimension}`;
+        const focus = state.charts?.focus || analyticsFocusFromCurrentForm();
+        const selectedMetric = focus.metric;
+        const selectedDimension = focus.dimension;
+        if (breakdown?.metric === selectedMetric && key === selectedDimension) return 0;
+        const order = [
+          "events.event_type",
+          "pageviews.pathname",
+          "pageviews.host",
+          "pageviews.referrer_domain",
+          "pageviews.referrer",
+          "events.browser",
+          "events.geo_country_code",
+          "events.geo_region",
+          "events.geo_city",
+        ];
+        const index = order.indexOf(key);
+        return index < 0 ? order.length + 1 : index + 1;
+      }
+
+      function renderCharts(charts) {
+        destroyPlayer();
+        state.playerEvents = [];
+        state.playerAnchorMs = 0;
+        state.playerWidth = 0;
+        state.playerHeight = 0;
+        els.player.style.minHeight = "";
+        els.player.innerHTML = "";
+        renderAnalyticsFacts(charts);
+        els.activeTitle.textContent = "Product analytics";
+        els.activeSubtitle.textContent = analyticsQuerySubtitle(charts?.focus || analyticsFocusFromCurrentForm());
+
+        const wrap = document.createElement("div");
+        wrap.className = "chart-overview";
+        wrap.append(renderMetricGrid(charts?.summary || [], charts?.focus?.metric));
+        wrap.append(renderSeriesPanel(charts));
+        wrap.append(renderBreakdownGrid(charts?.breakdowns || []));
+        els.player.appendChild(wrap);
+      }
+
+      function renderMetricGrid(metrics, selectedMetricRef = "") {
+        const grid = document.createElement("section");
+        grid.className = "metric-grid";
+        grid.setAttribute("aria-label", "Analytics metrics");
+        const pending = state.analyticsPendingPanels.has("summary");
+        grid.classList.toggle("is-pending", pending);
+        if (!metrics.length) {
+          if (pending) {
+            for (let index = 0; index < 6; index += 1) {
+              grid.appendChild(renderMetricSkeletonCard(index));
+            }
+          } else {
+            const empty = document.createElement("div");
+            empty.className = "empty";
+            empty.innerHTML = "<strong>No metrics</strong><span>Adjust filters and reload.</span>";
+            grid.appendChild(empty);
+          }
+          return grid;
+        }
+        for (const metric of metrics) {
+          const card = document.createElement("button");
+          card.type = "button";
+          card.className = "metric-card";
+          card.dataset.metric = metric.semantic_ref;
+          card.classList.toggle("is-selected", metric.semantic_ref === selectedMetricRef);
+          card.addEventListener("click", () => selectAnalyticsMetric(metric.semantic_ref));
+          const label = document.createElement("span");
+          label.textContent = metric.label;
+          const value = document.createElement("strong");
+          value.textContent = metric.display_value;
+          const ref = document.createElement("code");
+          ref.textContent = metric.semantic_ref;
+          card.append(label, value, ref);
+          grid.appendChild(card);
+        }
+        return grid;
+      }
+
+      function renderMetricSkeletonCard(index) {
+        const card = document.createElement("div");
+        card.className = "metric-card is-skeleton";
+        card.setAttribute("aria-hidden", "true");
+        for (const size of [index % 2 ? "medium" : "short", "long", "medium"]) {
+          const line = document.createElement("span");
+          line.className = `skeleton-line ${size}`;
+          card.appendChild(line);
+        }
+        return card;
+      }
+
+      function selectAnalyticsMetric(metricRef) {
+        if (!analyticsMetricModels[metricRef]) return;
+        els.metric.value = metricRef;
+        syncAnalyticsDimensions();
+        if (state.mode === "overview") requestAnalyticsSearch();
+      }
+
+      function renderSeriesPanel(charts) {
+        const series = charts?.series || [];
+        const config = seriesConfig(charts);
+        const panel = document.createElement("section");
+        panel.className = "chart-panel";
+        panel.classList.toggle("is-pending", state.analyticsPendingPanels.has("series"));
+        panel.setAttribute("aria-label", `${grainLabel(charts?.focus?.granularity)} trend`);
+
+        const head = document.createElement("div");
+        head.className = "chart-panel-head";
+        const label = document.createElement("span");
+        label.className = "label";
+        label.textContent = `${grainLabel(charts?.focus?.granularity)} trend`;
+        head.append(label, renderLegend(config));
+
+        const canvas = document.createElement("div");
+        canvas.className = "chart-canvas";
+        renderSeriesIntoCanvas(canvas, series, config, charts?.focus);
+        window.requestAnimationFrame(() => {
+          if (canvas.isConnected) renderSeriesIntoCanvas(canvas, series, config, charts?.focus);
+        });
+
+        panel.append(head, canvas);
+        return panel;
+      }
+
+      function renderBreakdownGrid(breakdowns) {
+        const grid = document.createElement("section");
+        grid.className = "breakdown-grid";
+        grid.setAttribute("aria-label", "Metric breakdowns");
+        const rendered = new Set();
+        const breakdownsByPanel = new Map(
+          breakdowns.map((breakdown) => [breakdown.panel_key || breakdownPanelKey(breakdown), breakdown]),
+        );
+        for (const panel of analyticsPanelsForCurrentQuery().filter((item) => !["summary", "series"].includes(item))) {
+          const breakdown = breakdownsByPanel.get(panel);
+          if (breakdown) {
+            rendered.add(breakdown);
+            grid.appendChild(renderBreakdownPanel(breakdown));
+          } else if (state.analyticsPendingPanels.has(panel)) {
+            grid.appendChild(renderLoadingBreakdownPanel(panel));
+          }
+        }
+        for (const breakdown of breakdowns) {
+          if (!rendered.has(breakdown)) grid.appendChild(renderBreakdownPanel(breakdown));
+        }
+        return grid;
+      }
+
+      function renderBreakdownPanel(breakdown) {
+        const panel = document.createElement("section");
+        panel.className = "chart-panel";
+
+        const head = document.createElement("div");
+        head.className = "chart-panel-head";
+        const title = document.createElement("span");
+        title.className = "label";
+        title.textContent = breakdown.title;
+        const meta = document.createElement("span");
+        meta.className = "chart-meta";
+        const code = document.createElement("code");
+        code.textContent = `${breakdown.model}.${breakdown.dimension}`;
+        meta.appendChild(code);
+        head.append(title, meta);
+
+        const list = document.createElement("div");
+        list.className = "breakdown-list";
+        if (!breakdown.rows.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.innerHTML = "<strong>No rows</strong><span>No grouped values matched.</span>";
+          list.appendChild(empty);
+        } else {
+          for (const row of breakdown.rows) {
+            list.appendChild(renderBreakdownRow(row, breakdown));
+          }
+        }
+
+        panel.append(head, list);
+        return panel;
+      }
+
+      function renderLoadingBreakdownPanel(panel) {
+        const section = document.createElement("section");
+        section.className = "chart-panel is-pending";
+        const head = document.createElement("div");
+        head.className = "chart-panel-head";
+        const title = document.createElement("span");
+        title.className = "label";
+        title.textContent = loadingBreakdownTitle(panel);
+        const meta = document.createElement("span");
+        meta.className = "chart-meta";
+        head.append(title, meta);
+        const list = document.createElement("div");
+        list.className = "breakdown-list";
+        for (let index = 0; index < 6; index += 1) {
+          const row = document.createElement("div");
+          row.className = "skeleton-row";
+          row.style.setProperty("--skeleton-width", `${86 - index * 8}%`);
+          list.appendChild(row);
+        }
+        section.append(head, list);
+        return section;
+      }
+
+      function breakdownPanelKey(breakdown) {
+        const key = `${breakdown?.model}.${breakdown?.dimension}`;
+        const focus = state.charts?.focus || analyticsFocusFromCurrentForm();
+        if (breakdown?.metric === focus.metric && key === focus.dimension) return "focus_breakdown";
+        return analyticsBuiltInBreakdownPanels[key] || key;
+      }
+
+      function loadingBreakdownTitle(panel) {
+        const focus = state.charts?.focus || analyticsFocusFromCurrentForm();
+        const titles = {
+          focus_breakdown: analyticsDimensionTitle(focus.dimension),
+          top_events: "Top events",
+          top_pages: "Top pages",
+          domains: "Domains",
+          referring_domains: "Referring domains",
+          referrers: "Referrers",
+          browsers: "Browsers",
+          countries: "Countries",
+          regions: "Regions",
+          cities: "Cities",
+        };
+        return titles[panel] || "Breakdown";
+      }
+
+      function renderBreakdownRow(row, breakdown) {
+        const isOther = Boolean(row.is_other || row.isOther);
+        const wrap = document.createElement(isOther ? "div" : "button");
+        const dimensionRef = `${breakdown.model}.${breakdown.dimension}`;
+        if (!isOther) wrap.type = "button";
+        wrap.className = "breakdown-row";
+        wrap.classList.toggle("is-other", isOther);
+        if (!isOther) {
+          wrap.dataset.dimension = dimensionRef;
+          wrap.dataset.value = row.label;
+        }
+        wrap.style.setProperty("--bar-width", `${Math.round(Math.max(0, Math.min(100, row.percent || 0)))}%`);
+        wrap.classList.toggle("is-selected", !isOther && isSemanticFilterSelected(dimensionRef, row.label));
+        if (!isOther) wrap.addEventListener("click", () => toggleSemanticFilter(dimensionRef, row.label));
+        const label = document.createElement("span");
+        label.className = "breakdown-label";
+        label.textContent = row.label;
+        const value = document.createElement("span");
+        value.className = "breakdown-value";
+        value.textContent = formatNumber(row.value);
+        wrap.append(label, value);
+        return wrap;
+      }
+
+      function renderLegend(config) {
+        const legend = document.createElement("div");
+        legend.className = "chart-legend";
+        for (const item of config) {
+          const key = document.createElement("span");
+          key.className = "legend-key";
+          const swatch = document.createElement("span");
+          swatch.className = "legend-swatch";
+          swatch.style.background = item.color;
+          const label = document.createElement("span");
+          label.textContent = item.label;
+          key.append(swatch, label);
+          legend.appendChild(key);
+        }
+        return legend;
+      }
+
+      function chartCanvasSize(canvas) {
+        const style = window.getComputedStyle(canvas);
+        const paddingX = parseFloat(style.paddingLeft || "0") + parseFloat(style.paddingRight || "0");
+        const paddingY = parseFloat(style.paddingTop || "0") + parseFloat(style.paddingBottom || "0");
+        const rect = canvas.getBoundingClientRect();
+        const width = Math.floor((rect.width || canvas.clientWidth || 960) - paddingX);
+        const height = Math.floor((rect.height || canvas.clientHeight || 260) - paddingY);
+        return {
+          width: Math.max(420, width),
+          height: Math.max(220, height),
+        };
+      }
+
+      function renderSeriesIntoCanvas(canvas, series, config, focus) {
+        const { width, height } = chartCanvasSize(canvas);
+        canvas.replaceChildren(renderSeriesSvg(series, config, focus, width, height));
+      }
+
+      function renderSeriesSvg(series, config, focus, width = 960, height = 260) {
+        const svgWidth = Math.max(420, Math.round(width));
+        const svgHeight = Math.max(220, Math.round(height));
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        svg.classList.add("chart-svg");
+        svg.setAttribute("viewBox", `0 0 ${svgWidth} ${svgHeight}`);
+        svg.setAttribute("role", "img");
+        svg.setAttribute("aria-label", `${grainLabel(focus?.granularity)} product analytics trend`);
+        svg.style.height = `${svgHeight}px`;
+
+        const maxValue = Math.max(
+          1,
+          ...series.flatMap((point) => config.map((item) => Number(point[item.key] || 0))),
+        );
+        const chart = {
+          left: 42,
+          top: 18,
+          right: 14,
+          bottom: 34,
+          width: Math.max(1, svgWidth - 56),
+          height: Math.max(1, svgHeight - 52),
+        };
+
+        appendSvgLine(svg, chart.left, chart.top + chart.height, chart.left + chart.width, chart.top + chart.height, "#dbe1e7");
+        appendSvgLine(svg, chart.left, chart.top, chart.left, chart.top + chart.height, "#dbe1e7");
+
+        if (!series.length) {
+          if (!state.analyticsPendingPanels.has("series")) {
+            appendSvgText(svg, svgWidth / 2, svgHeight / 2, "No trend data", "middle", "#5c6670");
+          }
+          return svg;
+        }
+
+        for (const item of config) {
+          const path = series
+            .map((point, index) => {
+              const x = chart.left + (series.length === 1 ? chart.width / 2 : (index / (series.length - 1)) * chart.width);
+              const y = chart.top + chart.height - (Number(point[item.key] || 0) / maxValue) * chart.height;
+              return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+            })
+            .join(" ");
+          const line = document.createElementNS("http://www.w3.org/2000/svg", "path");
+          line.setAttribute("d", path);
+          line.setAttribute("fill", "none");
+          line.setAttribute("stroke", item.color);
+          line.setAttribute("stroke-width", "3");
+          line.setAttribute("stroke-linecap", "round");
+          line.setAttribute("stroke-linejoin", "round");
+          svg.appendChild(line);
+        }
+
+        appendSvgText(svg, chart.left, svgHeight - 14, series[0].bucket, "start", "#5c6670");
+        appendSvgText(svg, chart.left + chart.width, svgHeight - 14, series.at(-1).bucket, "end", "#5c6670");
+        appendSvgText(svg, chart.left - 8, chart.top + 4, formatNumber(maxValue), "end", "#5c6670");
+        appendSvgText(svg, chart.left - 8, chart.top + chart.height + 4, "0", "end", "#5c6670");
+        return svg;
+      }
+
+      function appendSvgLine(svg, x1, y1, x2, y2, color) {
+        const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+        line.setAttribute("x1", x1);
+        line.setAttribute("y1", y1);
+        line.setAttribute("x2", x2);
+        line.setAttribute("y2", y2);
+        line.setAttribute("stroke", color);
+        line.setAttribute("stroke-width", "1");
+        svg.appendChild(line);
+      }
+
+      function appendSvgText(svg, x, y, text, anchor, color) {
+        const label = document.createElementNS("http://www.w3.org/2000/svg", "text");
+        label.setAttribute("x", x);
+        label.setAttribute("y", y);
+        label.setAttribute("text-anchor", anchor);
+        label.setAttribute("fill", color);
+        label.setAttribute("font-size", "11");
+        label.setAttribute("font-family", "SFMono-Regular, ui-monospace, monospace");
+        label.textContent = text;
+        svg.appendChild(label);
+      }
+
+      function seriesConfig(charts = null) {
+        const focusMetric = charts?.focus?.metric || "";
+        const config = [
+          {
+            key: "focused_value",
+            ref: focusMetric,
+            label: charts?.focus?.metric_label || "Selected",
+            color: "#087a55",
+          },
+          { key: "event_count", ref: "events.event_count", label: "Events", color: "#5c6670" },
+          { key: "pageviews", ref: "pageviews.pageviews", label: "Pageviews", color: "#2d5f9a" },
+          { key: "session_count", ref: "sessions.session_count", label: "Sessions", color: "#9a6b16" },
+          { key: "recordings", ref: "events.snapshot_events", label: "Recordings", color: "#9d332b" },
+        ];
+        return config.filter((item, index) => index === 0 || item.ref !== focusMetric);
+      }
+
+      function grainLabel(granularity) {
+        if (granularity === "week") return "Weekly";
+        if (granularity === "month") return "Monthly";
+        return "Daily";
+      }
+
+      function formatNumber(value) {
+        return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value || 0);
+      }
+
+      function analyticsFocusFromCurrentForm() {
+        return {
+          metric: els.metric.value || "events.event_count",
+          dimension: els.dimension.value || "events.event_type",
+          granularity: els.granularity.value || "day",
+        };
+      }
+
+      function analyticsFocusFromParams(params) {
+        return {
+          metric: params.get("metric") || els.metric.value || "events.event_count",
+          dimension: params.get("dimension") || els.dimension.value || "events.event_type",
+          granularity: params.get("granularity") || els.granularity.value || "day",
+        };
+      }
+
+      function selectedOptionLabel(select, value) {
+        const option = [...select.options].find((item) => item.value === value);
+        return option?.textContent?.trim() || value || "-";
+      }
+
+      function analyticsMetricLabel(metricRef) {
+        const metric = state.charts?.summary?.find((item) => item.semantic_ref === metricRef);
+        return metric?.label || selectedOptionLabel(els.metric, metricRef);
+      }
+
+      function analyticsDimensionLabel(dimensionRef) {
+        return selectedOptionLabel(els.dimension, dimensionRef);
+      }
+
+      function analyticsDimensionTitle(dimensionRef) {
+        const titles = {
+          "events.event_type": "Events",
+          "events.browser": "Browsers",
+          "events.geo_country_code": "Countries",
+          "events.geo_region": "Regions",
+          "events.geo_city": "Cities",
+          "pageviews.pathname": "Pages",
+          "pageviews.host": "Domains",
+          "pageviews.referrer_domain": "Referring domains",
+          "pageviews.referrer": "Referrers",
+          "sessions.landing_path": "Landing paths",
+          "sessions.browser": "Session browsers",
+          "sessions.geo_country_code": "Session countries",
+          "sessions.geo_region": "Session regions",
+          "sessions.geo_city": "Session cities",
+        };
+        return titles[dimensionRef] || analyticsDimensionLabel(dimensionRef);
+      }
+
+      function semanticFilterEntries() {
+        return Object.entries(semanticFilters()).flatMap(([dimension, values]) =>
+          (values || []).map((value) => ({ dimension, value: normalizeFilterValue(value) })).filter((item) => item.value),
+        );
+      }
+
+      function semanticFilterSummary() {
+        const entries = semanticFilterEntries();
+        if (!entries.length) return "No filters";
+        if (entries.length === 1) {
+          const entry = entries[0];
+          return `${semanticFilterLabel(entry.dimension)}: ${entry.value}`;
+        }
+        return `${entries.length} filters`;
+      }
+
+      function analyticsQuerySubtitle(focus) {
+        const filters = semanticFilterSummary();
+        const pieces = [
+          analyticsMetricLabel(focus.metric),
+          `Breakdown: ${analyticsDimensionLabel(focus.dimension)}`,
+          `${grainLabel(focus.granularity)} trend`,
+        ];
+        if (filters !== "No filters") pieces.push(filters);
+        return pieces.join(" · ");
+      }
+
       function renderFacts(session) {
+        els.inspectorTitle.textContent = "Session context";
+        setFactLabels("User", "First seen", "Duration", "Events", "Chunks", "First URL");
         els.activeTitle.textContent = session?.session_id || "No session selected";
         els.activeSubtitle.textContent = session
           ? `${session.distinct_id} · ${formatDurationMs(session.duration_ms)} · ${session.event_count} rrweb events`
-          : "Search replay sessions or choose an analytics event.";
+          : "Search replay sessions or choose an event.";
         els.detailDistinct.textContent = session?.distinct_id || "-";
-        els.detailApiKey.textContent = session?.api_key || "-";
+        els.detailSecondary.textContent = session ? formatTime(session.first_seen) : "-";
         els.detailDuration.textContent = session ? formatDurationMs(session.duration_ms) : "-";
         els.detailEvents.textContent = session ? String(session.event_count) : "-";
         els.detailChunks.textContent = session ? String(session.chunk_count) : "-";
         els.detailUrl.textContent = session?.first_url || "-";
+      }
+
+      function renderAnalyticsFacts(charts) {
+        const focus = charts?.focus || analyticsFocusFromCurrentForm();
+        els.inspectorTitle.textContent = "Analytics inspector";
+        setFactLabels("Metric", "Breakdown", "Trend", "Rows", "Engine", "State");
+        els.detailDistinct.textContent = analyticsMetricLabel(focus.metric);
+        els.detailSecondary.textContent = analyticsDimensionLabel(focus.dimension);
+        els.detailDuration.textContent = grainLabel(focus.granularity);
+        els.detailEvents.textContent = String(analyticsBreakdownLimit);
+        els.detailChunks.textContent = "Sidemantic";
+        els.detailUrl.textContent = state.analyticsLoading ? "Updating" : "Ready";
+      }
+
+      function setFactLabels(user, secondary, duration, events, chunks, url) {
+        els.detailDistinctLabel.textContent = user;
+        els.detailSecondaryLabel.textContent = secondary;
+        els.detailDurationLabel.textContent = duration;
+        els.detailEventsLabel.textContent = events;
+        els.detailChunksLabel.textContent = chunks;
+        els.detailUrlLabel.textContent = url;
       }
 
       function renderActivity(activity) {
@@ -1874,6 +3304,27 @@
           main.append(strong, detail);
           row.append(time, main);
           els.activity.appendChild(row);
+        }
+        setDebugPayload();
+      }
+
+      function renderChartContext(selectedMetric = null) {
+        const rows = selectedMetric
+          ? [
+              ["Metric", selectedMetric.label, selectedMetric.semantic_ref],
+              ["Value", selectedMetric.display_value, "Current query"],
+            ]
+          : [];
+
+        els.timelineLabel.textContent = selectedMetric ? "Metric detail" : "Selection";
+        els.activity.innerHTML = "";
+        els.activityCount.textContent = String(rows.length);
+        if (!rows.length) {
+          renderTimelineEmpty("No selection", "");
+          return;
+        }
+        for (const row of rows) {
+          appendContextRow(row[0], row[1], row[2]);
         }
         setDebugPayload();
       }
@@ -1966,6 +3417,23 @@
         els.activity.appendChild(row);
       }
 
+      function appendContextRow(labelText, titleText, detailText) {
+        const row = document.createElement("div");
+        row.className = "timeline-row context-row";
+        const label = document.createElement("span");
+        label.className = "timeline-time";
+        label.textContent = labelText;
+        const main = document.createElement("span");
+        main.className = "timeline-main";
+        const strong = document.createElement("strong");
+        strong.textContent = titleText;
+        const detail = document.createElement("span");
+        detail.textContent = detailText;
+        main.append(strong, detail);
+        row.append(label, main);
+        els.activity.appendChild(row);
+      }
+
       function renderTimelineEmpty(title, body) {
         els.activity.innerHTML = "";
         const empty = document.createElement("div");
@@ -1974,7 +3442,8 @@
         strong.textContent = title;
         const span = document.createElement("span");
         span.textContent = body;
-        empty.append(strong, span);
+        empty.appendChild(strong);
+        if (body) empty.appendChild(span);
         els.activity.appendChild(empty);
         setDebugPayload();
       }
@@ -2069,6 +3538,23 @@
         state.playerResizeTimer = window.setTimeout(resizePlayer, 120);
       }
 
+      function resizeCharts() {
+        if (state.mode !== "overview" || !state.charts) return;
+        const canvas = els.player.querySelector(".chart-canvas");
+        if (!canvas) return;
+        renderSeriesIntoCanvas(
+          canvas,
+          state.charts.series || [],
+          seriesConfig(state.charts),
+          state.charts.focus,
+        );
+      }
+
+      function scheduleChartResize() {
+        window.clearTimeout(state.chartResizeTimer);
+        state.chartResizeTimer = window.setTimeout(resizeCharts, 120);
+      }
+
       function seekPlayer(anchorMs) {
         const offset = Math.max(0, Math.round(anchorMs || 0));
         window.setTimeout(() => {
@@ -2091,7 +3577,7 @@
         const params = paramsFromForm({ mode: "sessionLoad" });
         params.set("session_id", sessionId);
         if (atMs) params.set("at_ms", String(Math.round(atMs)));
-        history.replaceState(null, "", `${location.pathname}?${params.toString()}`);
+        replaceUrl(replayPath, params);
       }
 
       async function copyLink() {
@@ -2108,6 +3594,7 @@
         els.toggleRail.setAttribute("aria-pressed", String(collapsed));
         els.toggleRail.setAttribute("aria-expanded", String(!collapsed));
         window.requestAnimationFrame(schedulePlayerResize);
+        window.requestAnimationFrame(scheduleChartResize);
       }
 
       function setInspectorCollapsed(collapsed) {
@@ -2119,11 +3606,13 @@
         els.toggleInspector.setAttribute("aria-pressed", String(collapsed));
         els.toggleInspector.setAttribute("aria-expanded", String(!collapsed));
         window.requestAnimationFrame(schedulePlayerResize);
+        window.requestAnimationFrame(scheduleChartResize);
       }
 
       function setDebugPayload() {
         els.debugPayload.textContent = JSON.stringify(
           {
+            charts: state.charts,
             selectedSession: state.selectedSession,
             selectedEvent: state.selectedEvent,
             selectedFunnel: state.selectedFunnel,
@@ -2138,7 +3627,8 @@
 
       async function runSearch() {
         try {
-          if (state.mode === "sessions") await loadSessions();
+          if (state.mode === "overview") await loadCharts();
+          else if (state.mode === "sessions") await loadSessions();
           else if (state.mode === "events") await loadEvents();
           else if (state.mode === "funnels") await loadFunnels();
           else if (state.mode === "friction") await loadFriction();
@@ -2151,19 +3641,32 @@
 
       function switchMode(mode) {
         setMode(mode);
+        if (state.section === "replays") replaceReplayUrlFromForm(mode);
         runSearch();
+      }
+
+      function switchSection(section) {
+        if (section === state.section) return;
+        setMode(section === "analytics" ? "overview" : state.lastReplayMode || "sessions");
+        if (state.section === "analytics") requestAnalyticsSearch();
+        else {
+          replaceReplayUrlFromForm();
+          runSearch();
+        }
       }
 
       els.filters.addEventListener("submit", (event) => {
         event.preventDefault();
-        runSearch();
+        requestSearchForCurrentMode();
       });
+      els.replaySection.addEventListener("click", () => switchSection("replays"));
+      els.analyticsSection.addEventListener("click", () => switchSection("analytics"));
       els.sessionMode.addEventListener("click", () => switchMode("sessions"));
       els.eventMode.addEventListener("click", () => switchMode("events"));
       els.funnelMode.addEventListener("click", () => switchMode("funnels"));
       els.frictionMode.addEventListener("click", () => switchMode("friction"));
       els.personMode.addEventListener("click", () => switchMode("person"));
-      els.reload.addEventListener("click", runSearch);
+      els.reload.addEventListener("click", requestSearchForCurrentMode);
       els.toggleRail.addEventListener("click", () => setRailCollapsed(!state.railCollapsed));
       els.toggleInspector.addEventListener("click", () =>
         setInspectorCollapsed(!state.inspectorCollapsed),
@@ -2176,10 +3679,14 @@
       els.copyLink.addEventListener("click", () => copyLink().catch(() => setStatus("copy failed")));
       els.debugToggle.addEventListener("click", () => els.debug.classList.toggle("is-open"));
       els.clear.addEventListener("click", () => {
+        cancelAnalyticsRequests();
         els.filters.reset();
         document.getElementById("limit").value = "100";
+        writeSemanticFilters({});
         setFunnelSteps(defaultFunnelSteps.join(","));
         setSignal("");
+        syncAnalyticsDimensions();
+        state.charts = null;
         state.sessions = [];
         state.events = [];
         state.funnels = [];
@@ -2196,15 +3703,22 @@
         renderActivity([]);
         setStatus("idle");
         showMessage("empty", "Ready", "Load sessions, then select a recording to replay.");
-        history.replaceState(null, "", location.pathname);
+        replaceUrl(state.section === "analytics" ? analyticsPath : replayPath, new URLSearchParams());
       });
 
       function bootFromUrl() {
         const params = new URLSearchParams(location.search);
+        const bootingAnalytics =
+          location.pathname === "/" ||
+          location.pathname.replace(/\/$/, "") === analyticsPath ||
+          params.get("section") === "analytics";
+        const bootingReplay = location.pathname.replace(/\/$/, "") === replayPath;
         for (const [key, value] of params.entries()) {
-          if (key === "at_ms" || key === "mode") continue;
+          if (key === "at_ms" || key === "mode" || key === "section") continue;
           setField(key, value);
         }
+        syncAnalyticsDimensions();
+        renderSemanticFilters();
         setFunnelSteps(params.get("steps") || document.getElementById("steps").value);
         setSignal(params.get("signal") || "");
         const sessionId = params.get("session_id");
@@ -2214,21 +3728,36 @@
           loadSessions({ silent: true, keepSelection: true })
             .then(() => loadSession(sessionId, Number.isFinite(atMs) ? atMs : 0))
             .catch((error) => showMessage("error", "Replay unavailable", error.message));
+        } else if (bootingAnalytics) {
+          setMode("overview");
+          replaceAnalyticsUrlFromForm();
+          runSearch();
         } else if (modes[params.get("mode")]) {
           setMode(params.get("mode"));
           runSearch();
-        } else {
+        } else if (bootingReplay) {
           setMode("sessions");
           renderActivity([]);
+        } else {
+          setMode("overview");
+          replaceAnalyticsUrlFromForm();
+          runSearch();
         }
       }
 
-      window.addEventListener("resize", schedulePlayerResize);
+      window.addEventListener("resize", () => {
+        schedulePlayerResize();
+        scheduleChartResize();
+      });
       if (window.ResizeObserver) {
-        new ResizeObserver(schedulePlayerResize).observe(els.player.parentElement);
+        new ResizeObserver(() => {
+          schedulePlayerResize();
+          scheduleChartResize();
+        }).observe(els.player.parentElement);
       }
 
       initModeControls();
+      initAnalyticsControls();
       bootFromUrl();
     </script>
   </body>

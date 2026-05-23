@@ -48,20 +48,29 @@ models:
               group2,
               group3,
               group4,
-              api_key,
               coalesce(json_extract_string(properties, '$.$session_id'), json_extract_string(properties, '$.session_id')) as session_id,
               coalesce(json_extract_string(properties, '$.$current_url'), json_extract_string(properties, '$.current_url'), json_extract_string(properties, '$.url')) as current_url,
               coalesce(json_extract_string(properties, '$.$pathname'), json_extract_string(properties, '$.pathname'), json_extract_string(properties, '$.path')) as pathname,
               coalesce(json_extract_string(properties, '$.$host'), json_extract_string(properties, '$.host')) as host,
               coalesce(json_extract_string(properties, '$.$title'), json_extract_string(properties, '$.title')) as page_title,
               coalesce(json_extract_string(properties, '$.$referrer'), json_extract_string(properties, '$.referrer')) as referrer,
+              nullif(regexp_extract(
+                coalesce(json_extract_string(properties, '$.$referrer'), json_extract_string(properties, '$.referrer')),
+                '^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?([^/?#]+)',
+                1
+              ), '') as referrer_domain,
               coalesce(json_extract_string(properties, '$.$utm_source'), json_extract_string(properties, '$.utm_source'), json_extract_string(properties, '$.$initial_utm_source')) as utm_source,
               coalesce(json_extract_string(properties, '$.$utm_medium'), json_extract_string(properties, '$.utm_medium'), json_extract_string(properties, '$.$initial_utm_medium')) as utm_medium,
               coalesce(json_extract_string(properties, '$.$utm_campaign'), json_extract_string(properties, '$.utm_campaign'), json_extract_string(properties, '$.$initial_utm_campaign')) as utm_campaign,
               coalesce(json_extract_string(properties, '$.$browser'), json_extract_string(properties, '$.browser')) as browser,
               coalesce(json_extract_string(properties, '$.$os'), json_extract_string(properties, '$.os')) as os,
               coalesce(json_extract_string(properties, '$.$device_type'), json_extract_string(properties, '$.device_type')) as device_type,
-              coalesce(json_extract_string(properties, '$.$geoip_country_code'), json_extract_string(properties, '$.country')) as geo_country_code
+              coalesce(json_extract_string(properties, '$.$geoip_country_code'), json_extract_string(properties, '$.country')) as geo_country_code,
+              coalesce(json_extract_string(properties, '$.$geoip_subdivision_1_code'), json_extract_string(properties, '$.region')) as geo_region,
+              coalesce(json_extract_string(properties, '$.$geoip_city_name'), json_extract_string(properties, '$.city')) as geo_city,
+              json_extract_string(properties, '$.$geoip_time_zone') as geo_timezone,
+              json_extract_string(properties, '$.cf_colo') as cf_colo,
+              try_cast(json_extract_string(properties, '$.cf_asn') as bigint) as cf_asn
             from {{ events_table }}
             left join identity_map on distinct_id = identity_map.linked_distinct_id
           )
@@ -105,6 +114,8 @@ models:
         type: categorical
       - name: referrer
         type: categorical
+      - name: referrer_domain
+        type: categorical
       - name: utm_source
         type: categorical
       - name: utm_medium
@@ -119,6 +130,20 @@ models:
         type: categorical
       - name: geo_country_code
         type: categorical
+      - name: geo_region
+        type: categorical
+        parent: geo_country_code
+      - name: geo_city
+        type: categorical
+        parent: geo_region
+      - name: geo_timezone
+        type: categorical
+        parent: geo_country_code
+      - name: cf_colo
+        type: categorical
+        parent: geo_country_code
+      - name: cf_asn
+        type: numeric
       - name: event_time
         type: time
         granularity: day
@@ -140,3 +165,29 @@ models:
         sql: resolved_person_id
         description: Distinct resolved persons with pageviews.
 
+    pre_aggregations:
+      - name: analytics_daily
+        measures:
+          - pageviews
+        dimensions:
+          - event_type
+          - pathname
+          - host
+          - referrer_domain
+          - referrer
+          - browser
+          - os
+          - device_type
+          - geo_country_code
+          - geo_region
+          - geo_city
+          - geo_timezone
+          - cf_asn
+          - utm_source
+          - utm_campaign
+        time_dimension: event_time
+        granularity: day
+        partition_granularity: month
+        refresh_key:
+          every: 1 hour
+          incremental: false

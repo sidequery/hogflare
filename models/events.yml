@@ -54,7 +54,6 @@ models:
           group3,
           group4,
           group_properties,
-          api_key,
           extra,
           coalesce(
             json_extract_string(properties, '$.$session_id'),
@@ -87,6 +86,14 @@ models:
             json_extract_string(properties, '$.$referrer'),
             json_extract_string(properties, '$.referrer')
           ) as referrer,
+          nullif(regexp_extract(
+            coalesce(
+              json_extract_string(properties, '$.$referrer'),
+              json_extract_string(properties, '$.referrer')
+            ),
+            '^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)?([^/?#]+)',
+            1
+          ), '') as referrer_domain,
           coalesce(
             json_extract_string(properties, '$.$utm_source'),
             json_extract_string(properties, '$.utm_source'),
@@ -188,11 +195,11 @@ models:
       select
         *,
         coalesce(session_id, actor_id || ':' || strftime(event_time, '%Y-%m-%d')) as session_key,
-        event_type not in ('$identify', '$groupidentify', '$create_alias', '$engage', '$snapshot') as is_capture_event,
+        event_type not in ('$identify', '$groupidentify', '$create_alias', '$engage', '$snapshot', '$snapshot_items') as is_capture_event,
         event_type in ('$pageview', 'page_view', '$screen', 'screen') as is_pageview_event,
         event_type in ('$identify', '$engage') as is_person_mutation_event,
         event_type = '$groupidentify' as is_group_event,
-        event_type = '$snapshot' as is_session_recording_event,
+        event_type in ('$snapshot', '$snapshot_items') as is_session_recording_event,
         resolved_person_id is not null as has_person,
         group0 is not null or group1 is not null or group2 is not null or group3 is not null or group4 is not null as has_group,
         session_id is not null as has_session_id
@@ -240,9 +247,6 @@ models:
       - name: team_id
         type: numeric
         description: Optional PostHog team id assigned by the Worker.
-      - name: api_key
-        type: categorical
-        description: PostHog project API key.
       - name: distinct_id
         type: categorical
         description: Original PostHog distinct id.
@@ -285,6 +289,9 @@ models:
       - name: referrer
         type: categorical
         description: Browser referrer.
+      - name: referrer_domain
+        type: categorical
+        description: Domain extracted from the browser referrer.
       - name: utm_source
         type: categorical
         description: UTM source.
@@ -326,15 +333,19 @@ models:
         description: Country code from Cloudflare enrichment or event properties.
       - name: geo_region
         type: categorical
+        parent: geo_country_code
         description: Region/subdivision from Cloudflare enrichment or event properties.
       - name: geo_city
         type: categorical
+        parent: geo_region
         description: City from Cloudflare enrichment or event properties.
       - name: geo_timezone
         type: categorical
+        parent: geo_country_code
         description: Timezone from Cloudflare enrichment.
       - name: cf_colo
         type: categorical
+        parent: geo_country_code
         description: Cloudflare colo.
       - name: cf_asn
         type: numeric
@@ -479,8 +490,8 @@ models:
       - name: snapshot_events
         agg: count
         filters:
-          - "event_type = '$snapshot'"
-        description: Session recording snapshot events.
+          - "event_type in ('$snapshot', '$snapshot_items')"
+        description: Session recording snapshot and normalized snapshot-item events.
       - name: grouped_events
         agg: count
         filters:
@@ -500,10 +511,6 @@ models:
         agg: count_distinct
         sql: coalesce(group0, group1, group2, group3, group4)
         description: Distinct group keys across populated group slots.
-      - name: unique_api_keys
-        agg: count_distinct
-        sql: api_key
-        description: Distinct PostHog project API keys.
       - name: power_users
         type: cohort
         entity: actor_id
@@ -523,6 +530,35 @@ models:
         having: session_count >= 2
         agg: count
         description: Count of actors with at least two sessions in the query scope.
+
+    pre_aggregations:
+      - name: analytics_daily
+        measures:
+          - event_count
+          - pageviews
+          - snapshot_events
+        dimensions:
+          - event_type
+          - pathname
+          - host
+          - referrer_domain
+          - referrer
+          - browser
+          - os
+          - device_type
+          - geo_country_code
+          - geo_region
+          - geo_city
+          - geo_timezone
+          - cf_asn
+          - utm_source
+          - utm_campaign
+        time_dimension: event_time
+        granularity: day
+        partition_granularity: month
+        refresh_key:
+          every: 1 hour
+          incremental: false
 
     segments:
       - name: capture_events
@@ -546,4 +582,3 @@ models:
       - name: session_recordings
         sql: is_session_recording_event
         description: Session recording snapshot events.
-
