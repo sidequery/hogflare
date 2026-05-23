@@ -333,13 +333,16 @@
         gap: 10px;
       }
 
+      .semantic-filter-block {
+        display: grid;
+        gap: 6px;
+      }
+
       .semantic-filter-strip {
         display: flex;
         align-items: center;
         flex-wrap: wrap;
         gap: 6px;
-        border-top: 1px solid var(--line);
-        padding-top: 8px;
       }
 
       .semantic-filter-pill {
@@ -1488,12 +1491,15 @@
                 </div>
               </div>
               <input id="semanticFilters" name="semantic_filters" type="hidden" />
-              <div
-                class="semantic-filter-strip is-hidden"
-                id="semanticFilterStrip"
-                data-testid="analytics-filter-pills"
-                aria-label="Active analytics filters"
-              ></div>
+              <div class="semantic-filter-block is-hidden" id="semanticFilterBlock">
+                <span class="label">Active filters</span>
+                <div
+                  class="semantic-filter-strip"
+                  id="semanticFilterStrip"
+                  data-testid="analytics-filter-pills"
+                  aria-label="Active analytics filters"
+                ></div>
+              </div>
             </div>
             <div class="field" data-section="replays">
               <label class="label" for="minDuration">Min duration</label>
@@ -1755,6 +1761,7 @@
         dimension: document.getElementById("dimension"),
         granularity: document.getElementById("granularity"),
         semanticFilters: document.getElementById("semanticFilters"),
+        semanticFilterBlock: document.getElementById("semanticFilterBlock"),
         semanticFilterStrip: document.getElementById("semanticFilterStrip"),
         submitButton: document.getElementById("submitButton"),
         clear: document.getElementById("clear"),
@@ -2112,7 +2119,7 @@
         const entries = Object.entries(filters).flatMap(([dimension, values]) =>
           (values || []).map((value) => ({ dimension, value: normalizeFilterValue(value) })).filter((item) => item.value),
         );
-        els.semanticFilterStrip.classList.toggle("is-hidden", !entries.length);
+        els.semanticFilterBlock.classList.toggle("is-hidden", !entries.length);
         for (const item of entries) {
           const pill = document.createElement("span");
           pill.className = "semantic-filter-pill";
