@@ -535,6 +535,7 @@ models:
       - name: analytics_hourly
         measures:
           - event_count
+          - capture_events
           - pageviews
           - snapshot_events
         dimensions:
@@ -562,6 +563,7 @@ models:
       - name: analytics_daily
         measures:
           - event_count
+          - capture_events
           - pageviews
           - snapshot_events
         dimensions:

@@ -157,17 +157,23 @@
         border-bottom: 0;
       }
 
+      .app.analytics-mode .status {
+        display: none !important;
+      }
+
       .app.analytics-mode .rail-body,
       .app.analytics-mode .rail-dock {
         display: none;
       }
 
-      .app.analytics-mode .stage-head {
-        padding-left: calc(var(--analytics-nav-width) + 16px);
-      }
-
       .app.analytics-mode .stage {
         grid-column: 1 / -1;
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+
+      .app.analytics-mode .stage-title,
+      .app.analytics-mode .stage-head .actions {
+        display: none;
       }
 
       .topbar,
@@ -1560,11 +1566,6 @@
           border-right: 0;
         }
 
-        .app.analytics-mode .stage-head {
-          height: auto;
-          padding: 64px 16px 8px;
-        }
-
         .filters {
           grid-template-columns: 1fr;
         }
@@ -1686,7 +1687,7 @@
                   <label class="label" for="metric">Metric</label>
                   <select id="metric" name="metric">
                     <optgroup label="Events">
-                      <option value="events.event_count">Events</option>
+                      <option value="events.capture_events">Events</option>
                       <option value="events.unique_users">Users</option>
                     </optgroup>
                     <optgroup label="Pageviews">
@@ -2035,6 +2036,7 @@
         playerResizeTimer: null,
         chartResizeTimer: null,
         analyticsRequestId: 0,
+        analyticsAbortController: null,
         analyticsLoading: false,
         analyticsPendingPanels: new Set(),
         railCollapsed: false,
@@ -2054,11 +2056,14 @@
       };
 
       const analyticsMetricModels = {
-        "events.event_count": "events",
+        "events.capture_events": "events",
         "events.unique_users": "events",
         "pageviews.pageviews": "pageviews",
         "sessions.session_count": "sessions",
         "sessions.average_session_seconds": "sessions",
+      };
+      const analyticsMetricAliases = {
+        "events.event_count": "events.capture_events",
       };
 
       const analyticsDefaultDimensions = {
@@ -2264,6 +2269,7 @@
       function setField(name, value) {
         const input = els.filters.elements.namedItem(name);
         if (!input || !value) return;
+        if (name === "metric") value = normalizeAnalyticsMetricRef(value);
         input.value = input.type === "datetime-local" ? isoToDateInput(value) : value;
       }
 
@@ -2886,12 +2892,21 @@
 
       function cancelAnalyticsRequests() {
         state.analyticsRequestId += 1;
+        if (state.analyticsAbortController) {
+          state.analyticsAbortController.abort();
+          state.analyticsAbortController = null;
+        }
         state.analyticsPendingPanels.clear();
         setAnalyticsLoading(false);
       }
 
       async function loadCharts(options = {}) {
         const requestId = ++state.analyticsRequestId;
+        if (state.analyticsAbortController) {
+          state.analyticsAbortController.abort();
+        }
+        const controller = new AbortController();
+        state.analyticsAbortController = controller;
         const params = paramsFromForm({ mode: "overview" });
         const availablePanels = analyticsPanelsForCurrentQuery();
         const panels = analyticsPanelsForRequest(options.panels, availablePanels);
@@ -2908,26 +2923,27 @@
           renderChartContext();
           replaceUrl(analyticsPath, params);
           let failures = 0;
-          await Promise.all(
-            panels.map(async (panel) => {
-              const panelParams = new URLSearchParams(params);
-              panelParams.set("panel", panel);
-              try {
-                const body = await requestJson("/analytics/api/charts", panelParams);
-                if (requestId !== state.analyticsRequestId) return;
-                mergeAnalyticsPanel(panel, body);
-              } catch (error) {
-                if (error?.name === "AbortError" || requestId !== state.analyticsRequestId) return;
-                failures += 1;
-              } finally {
-                if (requestId === state.analyticsRequestId) {
-                  state.analyticsPendingPanels.delete(panel);
-                  renderCharts(state.charts);
-                  renderChartContext();
-                }
+          for (const panel of panels) {
+            if (controller.signal.aborted || requestId !== state.analyticsRequestId) return;
+            const panelParams = new URLSearchParams(params);
+            panelParams.set("panel", panel);
+            try {
+              const body = await requestJson("/analytics/api/charts", panelParams, {
+                signal: controller.signal,
+              });
+              if (requestId !== state.analyticsRequestId) return;
+              mergeAnalyticsPanel(panel, body);
+            } catch (error) {
+              if (error?.name === "AbortError" || requestId !== state.analyticsRequestId) return;
+              failures += 1;
+            } finally {
+              if (requestId === state.analyticsRequestId) {
+                state.analyticsPendingPanels.delete(panel);
+                renderCharts(state.charts);
+                renderChartContext();
               }
-            }),
-          );
+            }
+          }
           if (requestId !== state.analyticsRequestId) return;
           if (failures === panels.length) throw new Error("Analytics panels failed to load.");
           if (failures) setStatus(`${failures} analytics panels failed`);
@@ -2935,6 +2951,9 @@
         } finally {
           if (requestId === state.analyticsRequestId) {
             setAnalyticsLoading(false);
+            if (state.analyticsAbortController === controller) {
+              state.analyticsAbortController = null;
+            }
             state.analyticsPendingPanels.clear();
             renderAnalyticsFacts(state.charts);
             renderChartContext();
@@ -3508,10 +3527,11 @@
       }
 
       function selectAnalyticsMetric(metricRef) {
+        metricRef = normalizeAnalyticsMetricRef(metricRef);
         if (!analyticsMetricModels[metricRef]) return;
         els.metric.value = metricRef;
         syncAnalyticsDimensions();
-        if (state.mode === "overview") requestAnalyticsSearch({ panels: analyticsFocusPanels() });
+        if (state.mode === "overview") requestAnalyticsSearch();
       }
 
       function renderSeriesPanel(charts) {
@@ -3783,7 +3803,7 @@
             label: charts?.focus?.metric_label || "Selected",
             color: "#087a55",
           },
-          { key: "event_count", ref: "events.event_count", label: "Events", color: "#5c6670" },
+          { key: "event_count", ref: "events.capture_events", label: "Events", color: "#5c6670" },
           { key: "pageviews", ref: "pageviews.pageviews", label: "Pageviews", color: "#2d5f9a" },
           { key: "session_count", ref: "events.unique_sessions", label: "Sessions", color: "#9a6b16" },
           { key: "recordings", ref: "events.snapshot_events", label: "Recordings", color: "#9d332b" },
@@ -3802,21 +3822,23 @@
         return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value || 0);
       }
 
+      function normalizeAnalyticsMetricRef(metricRef) {
+        return analyticsMetricAliases[metricRef] || metricRef;
+      }
+
       function analyticsFocusFromCurrentForm() {
-        const metric = analyticsMetricModels[els.metric.value] ? els.metric.value : "events.event_count";
+        const metric = normalizeAnalyticsMetricRef(els.metric.value);
         return {
-          metric,
+          metric: analyticsMetricModels[metric] ? metric : "events.capture_events",
           dimension: els.dimension.value || "events.event_type",
           granularity: els.granularity.value || "day",
         };
       }
 
       function analyticsFocusFromParams(params) {
-        const metric = analyticsMetricModels[params.get("metric")]
-          ? params.get("metric")
-          : els.metric.value || "events.event_count";
+        const metric = normalizeAnalyticsMetricRef(params.get("metric") || els.metric.value);
         return {
-          metric,
+          metric: analyticsMetricModels[metric] ? metric : "events.capture_events",
           dimension: params.get("dimension") || els.dimension.value || "events.event_type",
           granularity: params.get("granularity") || els.granularity.value || "day",
         };
@@ -4419,7 +4441,7 @@
           params.get("section") === "analytics";
         const bootingReplay = location.pathname.replace(/\/$/, "") === replayPath;
         const metricParam = params.get("metric");
-        if (bootingAnalytics && metricParam && !analyticsMetricModels[metricParam]) {
+        if (bootingAnalytics && metricParam && !analyticsMetricModels[normalizeAnalyticsMetricRef(metricParam)]) {
           setMode("overview");
           setStatus("error");
           showMessage("error", "Analytics unavailable", `Unsupported analytics metric: ${metricParam}`);

@@ -143,9 +143,9 @@ PANEL_DIMENSIONS = {
     },
 }
 METRICS = {
-    "events.event_count": {
+    "events.capture_events": {
         "model": "events",
-        "metric": "event_count",
+        "metric": "capture_events",
         "label": "Events",
         "display": "count",
         "context_key": "event_count",
@@ -185,11 +185,14 @@ METRICS = {
     },
 }
 QUERY_METRICS = {
-    "events.event_count",
+    "events.capture_events",
     "events.unique_users",
     "pageviews.pageviews",
     "sessions.session_count",
     "sessions.average_session_seconds",
+}
+METRIC_ALIASES = {
+    "events.event_count": "events.capture_events",
 }
 DIMENSIONS = {
     "events.event_type": {
@@ -507,6 +510,7 @@ class AnalyticsConfig:
         persons_table: str,
         model_dir: Path,
         preagg_enabled: bool,
+        preagg_refresh: bool,
         preagg_schema: str,
     ) -> None:
         self.account_id = account_id
@@ -516,6 +520,7 @@ class AnalyticsConfig:
         self.persons_table = persons_table
         self.model_dir = model_dir
         self.preagg_enabled = preagg_enabled
+        self.preagg_refresh = preagg_refresh
         self.preagg_schema = preagg_schema
 
     @classmethod
@@ -552,6 +557,7 @@ class AnalyticsConfig:
                 or "models"
             ),
             preagg_enabled=env_flag("HOGFLARE_ANALYTICS_PREAGG", default=True),
+            preagg_refresh=env_flag("HOGFLARE_ANALYTICS_PREAGG_REFRESH", default=False),
             preagg_schema=preagg_schema,
         )
 
@@ -616,7 +622,7 @@ class SidemanticAnalytics:
             )
 
         events_summary = self._one(
-            metrics=["events.event_count", "events.unique_users"],
+            metrics=["events.capture_events", "events.unique_users"],
             filters=events_filters,
             skip_default_time_dimensions=True,
         )
@@ -634,7 +640,7 @@ class SidemanticAnalytics:
         focus_bucket_ref = f"{metric['model']}.{focus_time_dimension}__{granularity}"
         context_series_rows = self._rows(
             metrics=[
-                "events.event_count",
+                "events.capture_events",
                 "events.pageviews",
                 "events.unique_sessions",
                 "events.snapshot_events",
@@ -667,7 +673,7 @@ class SidemanticAnalytics:
             focus_breakdown_filters,
         )
 
-        event_count = to_int(events_summary.get("event_count"))
+        event_count = to_int(events_summary.get("capture_events"))
         pageviews = to_int(pageviews_summary.get("pageviews"))
         unique_users = to_int(events_summary.get("unique_users"))
         session_count = to_int(sessions_summary.get("session_count"))
@@ -701,7 +707,7 @@ class SidemanticAnalytics:
                 "granularity": granularity,
             },
             "summary": [
-                count_metric("Events", event_count, "events", "event_count"),
+                count_metric("Events", event_count, "events", "capture_events"),
                 count_metric("Pageviews", pageviews, "pageviews", "pageviews"),
                 count_metric("Users", unique_users, "events", "unique_users"),
                 count_metric("SDK sessions", session_count, "sessions", "session_count"),
@@ -740,7 +746,7 @@ class SidemanticAnalytics:
 
         if panel == "summary":
             events_summary = self._one(
-                metrics=["events.event_count", "events.unique_users"],
+                metrics=["events.capture_events", "events.unique_users"],
                 filters=events_filters,
                 skip_default_time_dimensions=True,
             )
@@ -755,7 +761,7 @@ class SidemanticAnalytics:
                 skip_default_time_dimensions=True,
             )
             response["summary"] = [
-                count_metric("Events", to_int(events_summary.get("event_count")), "events", "event_count"),
+                count_metric("Events", to_int(events_summary.get("capture_events")), "events", "capture_events"),
                 count_metric("Pageviews", to_int(pageviews_summary.get("pageviews")), "pageviews", "pageviews"),
                 count_metric("Users", to_int(events_summary.get("unique_users")), "events", "unique_users"),
                 count_metric("SDK sessions", to_int(sessions_summary.get("session_count")), "sessions", "session_count"),
@@ -773,7 +779,7 @@ class SidemanticAnalytics:
             focus_bucket_ref = f"{metric['model']}.{focus_time_dimension}__{granularity}"
             context_series_rows = self._rows(
                 metrics=[
-                    "events.event_count",
+                    "events.capture_events",
                     "events.pageviews",
                     "events.unique_sessions",
                     "events.snapshot_events",
@@ -943,7 +949,7 @@ class SidemanticAnalytics:
         return [dict(zip(columns, row, strict=False)) for row in relation.fetchall()]
 
     def _materialize_preaggregations(self) -> None:
-        if not self.config.preagg_enabled:
+        if not self.config.preagg_enabled or not self.config.preagg_refresh:
             return
         con = self.layer.adapter.raw_connection
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {self.config.preagg_schema}")
@@ -1045,7 +1051,8 @@ class SidemanticAnalytics:
 
 
 def metric_def(value: Any) -> dict[str, Any]:
-    ref = clean(value) or "events.event_count"
+    ref = clean(value) or "events.capture_events"
+    ref = METRIC_ALIASES.get(ref, ref)
     if ref not in QUERY_METRICS:
         raise ValueError(f"Unsupported analytics metric: {ref}")
     metric = dict(METRICS[ref])
@@ -1151,12 +1158,12 @@ def series_points(
     context_bucket_key = f"event_time__{granularity}"
     focus_bucket_key = f"{focus_time_dimension}__{granularity}"
     context_by_bucket = {
-        date_label(row.get(context_bucket_key)): row
+        date_label(row.get(context_bucket_key), granularity): row
         for row in context_rows
         if row.get(context_bucket_key) is not None
     }
     focus_by_bucket = {
-        date_label(row.get(focus_bucket_key)): row
+        date_label(row.get(focus_bucket_key), granularity): row
         for row in focus_rows
         if row.get(focus_bucket_key) is not None
     }
@@ -1164,7 +1171,7 @@ def series_points(
     return [
         {
             "bucket": bucket,
-            "event_count": to_int(context_by_bucket.get(bucket, {}).get("event_count")),
+            "event_count": to_int(context_by_bucket.get(bucket, {}).get("capture_events")),
             "pageviews": to_int(context_by_bucket.get(bucket, {}).get("pageviews")),
             "session_count": to_int(context_by_bucket.get(bucket, {}).get("unique_sessions")),
             "recordings": to_int(context_by_bucket.get(bucket, {}).get("snapshot_events")),
@@ -1311,8 +1318,10 @@ def format_count(value: int) -> str:
     return f"{value:,}"
 
 
-def date_label(value: Any) -> str:
+def date_label(value: Any, granularity: str = "day") -> str:
     if isinstance(value, datetime):
+        if granularity == "hour":
+            return value.replace(minute=0, second=0, microsecond=0).isoformat()
         return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
