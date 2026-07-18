@@ -1907,8 +1907,6 @@ impl Importer {
                 }
             }
 
-            let next_cursor = validated_event_page_cursor(count, limit, next_cursor)?;
-
             let previous_events = self.summary.events;
             let sent = self.send(events).await?;
             self.summary.events += sent;
@@ -1916,7 +1914,13 @@ impl Importer {
                 eprintln!("PostHog import progress: events={}", self.summary.events);
             }
 
-            if count < limit {
+            let requires_cursor = event_page_requires_cursor(
+                count,
+                limit,
+                self.next_limit(self.config.max_events, self.summary.events),
+            );
+            let next_cursor = validated_event_page_cursor(requires_cursor, next_cursor)?;
+            if !requires_cursor {
                 break;
             }
             cursor = next_cursor;
@@ -2583,17 +2587,20 @@ fn events_query(
 }
 
 fn validated_event_page_cursor(
-    count: usize,
-    limit: usize,
+    required: bool,
     cursor: Option<EventCursor>,
 ) -> Result<Option<EventCursor>, ImportError> {
-    if count == limit && cursor.is_none() {
+    if required && cursor.is_none() {
         return Err(ImportError::InvalidPostHogResponse(
             "cannot safely paginate a full events page because its final row is missing a timestamp or UUID tie-breaker"
                 .to_string(),
         ));
     }
     Ok(cursor)
+}
+
+fn event_page_requires_cursor(count: usize, limit: usize, next_limit: Option<usize>) -> bool {
+    count == limit && next_limit.is_some()
 }
 
 fn events_by_uuids_query(uuids: &[String]) -> String {
@@ -3125,13 +3132,23 @@ mod tests {
     }
 
     #[test]
-    fn full_events_page_requires_safe_cursor() {
-        let error = validated_event_page_cursor(100, 100, None).unwrap_err();
+    fn continuing_full_events_page_requires_safe_cursor() {
+        let required = event_page_requires_cursor(100, 100, Some(100));
+        let error = validated_event_page_cursor(required, None).unwrap_err();
 
+        assert!(required);
         assert!(matches!(error, ImportError::InvalidPostHogResponse(_)));
-        assert!(validated_event_page_cursor(99, 100, None)
+    }
+
+    #[test]
+    fn capped_terminal_events_page_does_not_require_cursor() {
+        let required = event_page_requires_cursor(100, 100, None);
+
+        assert!(!required);
+        assert!(validated_event_page_cursor(required, None)
             .unwrap()
             .is_none());
+        assert!(!event_page_requires_cursor(99, 100, Some(100)));
     }
 
     #[test]
