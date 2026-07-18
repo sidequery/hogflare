@@ -187,3 +187,47 @@ models:
         agg: count_distinct
         sql: session_id
         description: Distinct affected SDK sessions.
+
+    pre_aggregations:
+      - name: errors_hourly
+        measures:
+          - error_event_count
+        dimensions:
+          - team_id
+          - api_key
+          - issue_fingerprint
+          - exception_type
+          - exception_level
+          - handled
+          - browser
+          - os
+          - library
+          - library_version
+        time_dimension: event_time
+        granularity: hour
+        partition_granularity: day
+        refresh_key:
+          every: 1 hour
+          incremental: true
+          update_window: 2 days
+      - name: errors_daily
+        measures:
+          - error_event_count
+        dimensions:
+          - team_id
+          - api_key
+          - issue_fingerprint
+          - exception_type
+          - exception_level
+          - handled
+          - browser
+          - os
+          - library
+          - library_version
+        time_dimension: event_time
+        granularity: day
+        partition_granularity: month
+        refresh_key:
+          every: 1 hour
+          incremental: true
+          update_window: 35 days

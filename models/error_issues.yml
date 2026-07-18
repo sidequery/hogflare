@@ -1,7 +1,22 @@
 models:
   - name: error_issues
     sql: |
-      with exception_events as (
+      with relevant_events as materialized (
+        select
+          uuid,
+          team_id,
+          api_key,
+          source,
+          event,
+          distinct_id,
+          person_id,
+          created_at,
+          timestamp,
+          properties
+        from {{ events_table }}
+        where event in ('$exception', '$error_issue_status')
+      ),
+      exception_events as (
         select
           uuid,
           team_id,
@@ -36,7 +51,7 @@ models:
           json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].function') as top_frame_function,
           json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].filename') as top_frame_filename,
           try_cast(json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].lineno') as bigint) as top_frame_lineno
-        from {{ events_table }}
+        from relevant_events
         where event = '$exception'
       ),
       normalized_events as (
@@ -80,7 +95,7 @@ models:
           json_extract_string(properties, '$.reason') as status_reason,
           coalesce(timestamp, created_at) as status_updated_at,
           created_at
-        from {{ events_table }}
+        from relevant_events
         where event = '$error_issue_status'
           and source = 'hogflare'
           and json_extract_string(properties, '$.fingerprint') is not null

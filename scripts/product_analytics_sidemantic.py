@@ -512,6 +512,8 @@ class AnalyticsConfig:
         preagg_enabled: bool,
         preagg_refresh: bool,
         preagg_schema: str,
+        preagg_database: Path,
+        preagg_refresh_interval_seconds: int,
     ) -> None:
         self.account_id = account_id
         self.bucket = bucket
@@ -522,9 +524,13 @@ class AnalyticsConfig:
         self.preagg_enabled = preagg_enabled
         self.preagg_refresh = preagg_refresh
         self.preagg_schema = preagg_schema
+        self.preagg_database = preagg_database
+        self.preagg_refresh_interval_seconds = preagg_refresh_interval_seconds
 
     @classmethod
     def from_env(cls) -> "AnalyticsConfig":
+        account_id = env_required_any("HOGFLARE_ANALYTICS_ACCOUNT_ID", "HOGFLARE_REPLAY_ACCOUNT_ID")
+        bucket = env_required_any("HOGFLARE_ANALYTICS_BUCKET", "HOGFLARE_REPLAY_BUCKET")
         events_table = env_required_any("HOGFLARE_ANALYTICS_EVENTS_TABLE", "HOGFLARE_REPLAY_EVENTS_TABLE")
         persons_table = (
             os.environ.get("HOGFLARE_ANALYTICS_PERSONS_TABLE")
@@ -542,10 +548,19 @@ class AnalyticsConfig:
         )
         if not IDENTIFIER_RE.match(preagg_schema):
             raise ValueError("HOGFLARE_ANALYTICS_PREAGG_SCHEMA must be a SQL identifier")
+        preagg_refresh_interval_seconds = int(
+            os.environ.get("HOGFLARE_ANALYTICS_PREAGG_REFRESH_INTERVAL_SECONDS") or "3600"
+        )
+        if preagg_refresh_interval_seconds <= 0:
+            raise ValueError("HOGFLARE_ANALYTICS_PREAGG_REFRESH_INTERVAL_SECONDS must be positive")
+        preagg_database = Path(
+            os.environ.get("HOGFLARE_ANALYTICS_PREAGG_DATABASE")
+            or f"/tmp/hogflare-analytics-{account_id}-{bucket}.duckdb"
+        )
 
         return cls(
-            account_id=env_required_any("HOGFLARE_ANALYTICS_ACCOUNT_ID", "HOGFLARE_REPLAY_ACCOUNT_ID"),
-            bucket=env_required_any("HOGFLARE_ANALYTICS_BUCKET", "HOGFLARE_REPLAY_BUCKET"),
+            account_id=account_id,
+            bucket=bucket,
             token=env_required_any(
                 "HOGFLARE_ANALYTICS_R2_SQL_TOKEN",
                 "HOGFLARE_REPLAY_R2_SQL_TOKEN",
@@ -557,8 +572,10 @@ class AnalyticsConfig:
                 or "models"
             ),
             preagg_enabled=env_flag("HOGFLARE_ANALYTICS_PREAGG", default=True),
-            preagg_refresh=env_flag("HOGFLARE_ANALYTICS_PREAGG_REFRESH", default=False),
+            preagg_refresh=env_flag("HOGFLARE_ANALYTICS_PREAGG_REFRESH", default=True),
             preagg_schema=preagg_schema,
+            preagg_database=preagg_database,
+            preagg_refresh_interval_seconds=preagg_refresh_interval_seconds,
         )
 
     @property
@@ -581,8 +598,9 @@ class AnalyticsConfig:
 class SidemanticAnalytics:
     def __init__(self, config: AnalyticsConfig) -> None:
         self.config = config
+        config.preagg_database.parent.mkdir(parents=True, exist_ok=True)
         self.layer = SemanticLayer(
-            connection="duckdb:///:memory:",
+            connection=f"duckdb:///{config.preagg_database.resolve()}",
             auto_register=False,
             use_preaggregations=config.preagg_enabled,
             preagg_schema=config.preagg_schema,
@@ -590,6 +608,7 @@ class SidemanticAnalytics:
         self._connect_iceberg()
         load_from_directory(self.layer, str(config.model_dir))
         self._bind_model_tables()
+        self._next_preagg_refresh_at = 0.0
         self._materialize_preaggregations()
         self.generator = SQLGenerator(
             self.layer.graph,
@@ -598,6 +617,7 @@ class SidemanticAnalytics:
         )
 
     def run(self, query: dict[str, Any]) -> dict[str, Any]:
+        self._materialize_preaggregations()
         top_limit = ANALYTICS_BREAKDOWN_LIMIT
         metric = metric_def(query.get("metric"))
         dimension = dimension_def(query.get("dimension"), metric["model"])
@@ -951,6 +971,9 @@ class SidemanticAnalytics:
     def _materialize_preaggregations(self) -> None:
         if not self.config.preagg_enabled or not self.config.preagg_refresh:
             return
+        now = time.monotonic()
+        if now < self._next_preagg_refresh_at:
+            return
         con = self.layer.adapter.raw_connection
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {self.config.preagg_schema}")
         for model_name, model in self.layer.graph.models.items():
@@ -963,13 +986,26 @@ class SidemanticAnalytics:
                     file=sys.stderr,
                     flush=True,
                 )
+                refresh_mode = None
+                if preagg.partition_granularity:
+                    try:
+                        con.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
+                    except Exception:
+                        # An incremental partition build only visits its update window.
+                        # Bootstrap the complete history before treating older buckets
+                        # as immutable on subsequent refreshes.
+                        refresh_mode = "full"
                 result = preagg.refresh(
                     connection=con,
                     source_sql=source_sql,
                     table_name=table_name,
-                    mode="full",
+                    mode=refresh_mode,
+                    model=model,
+                    schema=self.config.preagg_schema,
+                    dialect="duckdb",
                 )
-                con.execute(f"ANALYZE {table_name}")
+                if not preagg.partition_granularity:
+                    con.execute(f"ANALYZE {table_name}")
                 elapsed = time.perf_counter() - started
                 print(
                     "sidemantic preagg refresh done "
@@ -978,6 +1014,7 @@ class SidemanticAnalytics:
                     file=sys.stderr,
                     flush=True,
                 )
+        self._next_preagg_refresh_at = time.monotonic() + self.config.preagg_refresh_interval_seconds
 
     def _one(self, **kwargs: Any) -> dict[str, Any]:
         rows = self._rows(**kwargs)
