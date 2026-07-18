@@ -1800,7 +1800,6 @@ impl Importer {
             self.config.to,
             self.config.events_after_cursor(),
             self.config.events_offset,
-            true,
         )
         .await
     }
@@ -1865,14 +1864,8 @@ impl Importer {
 
         while window_start < import_end {
             let window_end = (window_start + window_duration).min(import_end);
-            self.import_events_range(
-                Some(window_start),
-                Some(window_end),
-                cursor.take(),
-                0,
-                false,
-            )
-            .await?;
+            self.import_events_range(Some(window_start), Some(window_end), cursor.take(), 0)
+                .await?;
             window_start = window_end;
         }
 
@@ -1885,7 +1878,6 @@ impl Importer {
         to: Option<DateTime<Utc>>,
         initial_cursor: Option<EventCursor>,
         initial_offset: usize,
-        use_keyset_pagination: bool,
     ) -> Result<(), ImportError> {
         let mut offset = initial_offset;
         let mut cursor = initial_cursor;
@@ -1924,7 +1916,7 @@ impl Importer {
                 eprintln!("PostHog import progress: events={}", self.summary.events);
             }
 
-            if use_keyset_pagination && next_cursor.is_some() {
+            if next_cursor.is_some() {
                 cursor = next_cursor;
                 offset = 0;
             } else {
@@ -2583,9 +2575,15 @@ fn events_query(
         format!("where {}", filters.join(" and "))
     };
 
+    let offset_clause = if offset == 0 {
+        String::new()
+    } else {
+        format!(" offset {offset}")
+    };
+
     format!(
         "select uuid, event, toString(distinct_id), timestamp, created_at, properties \
-         from events {where_clause} order by timestamp asc, toString(uuid) asc limit {limit} offset {offset}"
+         from events {where_clause} order by timestamp asc, toString(uuid) asc limit {limit}{offset_clause}"
     )
 }
 
@@ -3080,7 +3078,16 @@ mod tests {
 
         assert!(query.contains("timestamp > toDateTime64('2024-09-21 03:24:11.000000', 6, 'UTC')"));
         assert!(query.contains("toString(uuid) > '0192129b-c354-77b4-b496-9be7ec571fb4'"));
-        assert!(query.contains("limit 200 offset 0"));
+        assert!(query.ends_with("limit 200"));
+        assert!(!query.contains(" offset "));
+    }
+
+    #[test]
+    fn omits_zero_offset_from_initial_events_query() {
+        let query = events_query(100, 0, None, None, None);
+
+        assert!(query.ends_with("limit 100"));
+        assert!(!query.contains(" offset "));
     }
 
     #[test]
