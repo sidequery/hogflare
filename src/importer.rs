@@ -1895,12 +1895,10 @@ impl Importer {
 
             let count = rows.len();
             let mut events = Vec::with_capacity(count);
-            let mut next_cursor = cursor.clone();
+            let mut next_cursor = None;
             for row in rows {
                 let row = EventRow::from_value(row)?;
-                if let Some(row_cursor) = row.cursor() {
-                    next_cursor = Some(row_cursor);
-                }
+                next_cursor = row.cursor();
                 if let Some(event) = self.row_to_pipeline_event(row)? {
                     events.push(ImportBatchItem {
                         key: ImportKey::event(event.uuid.clone()),
@@ -1909,6 +1907,8 @@ impl Importer {
                 }
             }
 
+            let next_cursor = validated_event_page_cursor(count, limit, next_cursor)?;
+
             let previous_events = self.summary.events;
             let sent = self.send(events).await?;
             self.summary.events += sent;
@@ -1916,16 +1916,11 @@ impl Importer {
                 eprintln!("PostHog import progress: events={}", self.summary.events);
             }
 
-            if next_cursor.is_some() {
-                cursor = next_cursor;
-                offset = 0;
-            } else {
-                cursor = None;
-                offset += count;
-            }
             if count < limit {
                 break;
             }
+            cursor = next_cursor;
+            offset = 0;
         }
 
         Ok(())
@@ -2587,6 +2582,20 @@ fn events_query(
     )
 }
 
+fn validated_event_page_cursor(
+    count: usize,
+    limit: usize,
+    cursor: Option<EventCursor>,
+) -> Result<Option<EventCursor>, ImportError> {
+    if count == limit && cursor.is_none() {
+        return Err(ImportError::InvalidPostHogResponse(
+            "cannot safely paginate a full events page because its final row is missing a timestamp or UUID tie-breaker"
+                .to_string(),
+        ));
+    }
+    Ok(cursor)
+}
+
 fn events_by_uuids_query(uuids: &[String]) -> String {
     let uuid_list = uuids
         .iter()
@@ -2918,9 +2927,10 @@ impl EventRow {
     }
 
     fn cursor(&self) -> Option<EventCursor> {
+        let uuid = self.uuid.as_ref().filter(|uuid| !uuid.is_empty())?.clone();
         Some(EventCursor {
             timestamp: self.timestamp?,
-            uuid: self.uuid.clone(),
+            uuid: Some(uuid),
         })
     }
 }
@@ -3088,6 +3098,40 @@ mod tests {
 
         assert!(query.ends_with("limit 100"));
         assert!(!query.contains(" offset "));
+    }
+
+    #[test]
+    fn event_cursor_requires_uuid_tie_breaker() {
+        let timestamp = parse_datetime("2025-01-01T12:00:00Z").unwrap();
+        let without_uuid = EventRow {
+            uuid: None,
+            event: Some("test".to_string()),
+            distinct_id: Some("user-1".to_string()),
+            timestamp: Some(timestamp),
+            created_at: Some(timestamp),
+            properties: None,
+        };
+        let with_uuid = EventRow {
+            uuid: Some("event-1".to_string()),
+            event: Some("test".to_string()),
+            distinct_id: Some("user-1".to_string()),
+            timestamp: Some(timestamp),
+            created_at: Some(timestamp),
+            properties: None,
+        };
+
+        assert!(without_uuid.cursor().is_none());
+        assert_eq!(with_uuid.cursor().unwrap().uuid.as_deref(), Some("event-1"));
+    }
+
+    #[test]
+    fn full_events_page_requires_safe_cursor() {
+        let error = validated_event_page_cursor(100, 100, None).unwrap_err();
+
+        assert!(matches!(error, ImportError::InvalidPostHogResponse(_)));
+        assert!(validated_event_page_cursor(99, 100, None)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
