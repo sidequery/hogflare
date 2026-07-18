@@ -46,7 +46,8 @@ models:
           person_id,
           created_at,
           timestamp,
-          properties
+          properties,
+          context
         from {{ events_table }} as event_source
         left join identity_map
           on event_source.team_id is not distinct from identity_map.identity_team_id
@@ -66,7 +67,8 @@ models:
           properties,
           coalesce(
             json_extract_string(properties, '$.$session_id'),
-            json_extract_string(properties, '$.session_id')
+            json_extract_string(properties, '$.session_id'),
+            json_extract_string(context, '$.session_id')
           ) as session_id,
           coalesce(
             json_extract_string(properties, '$.$current_url'),

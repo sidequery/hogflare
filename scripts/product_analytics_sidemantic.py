@@ -514,6 +514,7 @@ class AnalyticsConfig:
         preagg_schema: str,
         preagg_database: Path,
         preagg_refresh_interval_seconds: int,
+        preagg_full_refresh_interval_seconds: int,
     ) -> None:
         self.account_id = account_id
         self.bucket = bucket
@@ -526,6 +527,7 @@ class AnalyticsConfig:
         self.preagg_schema = preagg_schema
         self.preagg_database = preagg_database
         self.preagg_refresh_interval_seconds = preagg_refresh_interval_seconds
+        self.preagg_full_refresh_interval_seconds = preagg_full_refresh_interval_seconds
 
     @classmethod
     def from_env(cls) -> "AnalyticsConfig":
@@ -553,6 +555,11 @@ class AnalyticsConfig:
         )
         if preagg_refresh_interval_seconds <= 0:
             raise ValueError("HOGFLARE_ANALYTICS_PREAGG_REFRESH_INTERVAL_SECONDS must be positive")
+        preagg_full_refresh_interval_seconds = int(
+            os.environ.get("HOGFLARE_ANALYTICS_PREAGG_FULL_REFRESH_INTERVAL_SECONDS") or "86400"
+        )
+        if preagg_full_refresh_interval_seconds <= 0:
+            raise ValueError("HOGFLARE_ANALYTICS_PREAGG_FULL_REFRESH_INTERVAL_SECONDS must be positive")
         preagg_database = Path(
             os.environ.get("HOGFLARE_ANALYTICS_PREAGG_DATABASE")
             or f"/tmp/hogflare-analytics-{account_id}-{bucket}.duckdb"
@@ -576,6 +583,7 @@ class AnalyticsConfig:
             preagg_schema=preagg_schema,
             preagg_database=preagg_database,
             preagg_refresh_interval_seconds=preagg_refresh_interval_seconds,
+            preagg_full_refresh_interval_seconds=preagg_full_refresh_interval_seconds,
         )
 
     @property
@@ -976,6 +984,7 @@ class SidemanticAnalytics:
             return
         con = self.layer.adapter.raw_connection
         con.execute(f"CREATE SCHEMA IF NOT EXISTS {self.config.preagg_schema}")
+        full_refresh_due = self._full_preaggregation_refresh_due(con)
         for model_name, model in self.layer.graph.models.items():
             for preagg in model.pre_aggregations:
                 table_name = preagg.get_table_name(model_name, schema=self.config.preagg_schema)
@@ -986,8 +995,8 @@ class SidemanticAnalytics:
                     file=sys.stderr,
                     flush=True,
                 )
-                refresh_mode = None
-                if preagg.partition_granularity:
+                refresh_mode = "full" if full_refresh_due else None
+                if preagg.partition_granularity and refresh_mode is None:
                     try:
                         con.execute(f"SELECT 1 FROM {table_name} LIMIT 1")
                     except Exception:
@@ -1014,7 +1023,28 @@ class SidemanticAnalytics:
                     file=sys.stderr,
                     flush=True,
                 )
+        if full_refresh_due:
+            self._record_full_preaggregation_refresh(con)
         self._next_preagg_refresh_at = time.monotonic() + self.config.preagg_refresh_interval_seconds
+
+    def _full_preaggregation_refresh_due(self, con: Any) -> bool:
+        state_table = f"{self.config.preagg_schema}._hogflare_refresh_state"
+        con.execute(f"CREATE TABLE IF NOT EXISTS {state_table} (last_full_refresh_at TIMESTAMP)")
+        row = con.execute(
+            f"""
+            SELECT max(last_full_refresh_at) <= cast(current_timestamp as timestamp) - (? * INTERVAL '1 second')
+            FROM {state_table}
+            """,
+            [self.config.preagg_full_refresh_interval_seconds],
+        ).fetchone()
+        return not row or row[0] is None or bool(row[0])
+
+    def _record_full_preaggregation_refresh(self, con: Any) -> None:
+        state_table = f"{self.config.preagg_schema}._hogflare_refresh_state"
+        con.execute(f"DELETE FROM {state_table}")
+        con.execute(
+            f"INSERT INTO {state_table} VALUES (cast(current_timestamp as timestamp))"
+        )
 
     def _one(self, **kwargs: Any) -> dict[str, Any]:
         rows = self._rows(**kwargs)

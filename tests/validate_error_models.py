@@ -153,7 +153,7 @@ def main() -> None:
             "2026-07-18 10:01:00",
             "2026-07-18 10:01:00",
             exception_properties(frames_b),
-            None,
+            json.dumps({"session_id": "context-session-b"}),
             None,
             None,
             None,
@@ -213,24 +213,25 @@ def main() -> None:
     ], event_frames
 
     resolved_identities = connection.execute(
-        f"select api_key, actor_id, identity_id from ({model_sql('error_events')}) order by api_key, actor_id"
+        f"select api_key, actor_id, identity_id, session_id "
+        f"from ({model_sql('error_events')}) order by api_key, actor_id"
     ).fetchall()
     assert resolved_identities == [
-        ("phc_project_a", "identified-a", "person-a"),
-        ("phc_project_a", "user-a", "person-a"),
-        ("phc_project_b", "user-b", "user-b"),
+        ("phc_project_a", "identified-a", "person-a", None),
+        ("phc_project_a", "user-a", "person-a", None),
+        ("phc_project_b", "user-b", "user-b", "context-session-b"),
     ], resolved_identities
 
     issues = connection.execute(
-        f"select team_id, api_key, issue_fingerprint, status, event_count, affected_users "
+        f"select team_id, api_key, issue_fingerprint, status, event_count, affected_users, affected_sessions "
         f"from ({model_sql('error_issues')}) order by api_key"
     ).fetchall()
     assert issues == [
-        (1, "phc_project_a", "shared-fingerprint", "resolved", 2, 1),
-        (2, "phc_project_b", "shared-fingerprint", "active", 1, 1),
+        (1, "phc_project_a", "shared-fingerprint", "resolved", 2, 1, 0),
+        (2, "phc_project_b", "shared-fingerprint", "active", 1, 1, 1),
     ], issues
 
-    print("error model identity, isolation, trusted status, and top-frame checks passed")
+    print("error model identity, session, isolation, trusted status, and top-frame checks passed")
 
 
 if __name__ == "__main__":
