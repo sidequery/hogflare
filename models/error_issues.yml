@@ -1,0 +1,230 @@
+models:
+  - name: error_issues
+    sql: |
+      with exception_events as (
+        select
+          uuid,
+          team_id,
+          api_key,
+          distinct_id as actor_id,
+          coalesce(person_id, distinct_id) as identity_id,
+          person_id,
+          coalesce(timestamp, created_at) as event_time,
+          properties,
+          coalesce(
+            json_extract_string(properties, '$.$session_id'),
+            json_extract_string(properties, '$.session_id')
+          ) as session_id,
+          coalesce(
+            json_extract_string(properties, '$.$current_url'),
+            json_extract_string(properties, '$.current_url'),
+            json_extract_string(properties, '$.url')
+          ) as current_url,
+          coalesce(
+            json_extract_string(properties, '$.$pathname'),
+            json_extract_string(properties, '$.pathname'),
+            json_extract_string(properties, '$.path')
+          ) as pathname,
+          coalesce(
+            json_extract_string(properties, '$.$exception_level'),
+            json_extract_string(properties, '$.level'),
+            'error'
+          ) as exception_level,
+          json_extract_string(properties, '$.$exception_fingerprint') as explicit_fingerprint,
+          json_extract_string(properties, '$.$exception_list[0].type') as exception_type,
+          json_extract_string(properties, '$.$exception_list[0].value') as exception_value,
+          json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].function') as top_frame_function,
+          json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].filename') as top_frame_filename,
+          try_cast(json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].lineno') as bigint) as top_frame_lineno
+        from {{ events_table }}
+        where event = '$exception'
+      ),
+      normalized_events as (
+        select
+          *,
+          coalesce(
+            explicit_fingerprint,
+            concat(
+              coalesce(exception_type, 'Error'),
+              '|',
+              coalesce(exception_value, ''),
+              '|',
+              coalesce(top_frame_function, ''),
+              '|',
+              coalesce(top_frame_filename, ''),
+              '|',
+              coalesce(cast(top_frame_lineno as varchar), '')
+            )
+          ) as issue_fingerprint
+        from exception_events
+      ),
+      scoped_events as (
+        select
+          *,
+          concat(
+            coalesce(cast(team_id as varchar), 'null'),
+            '|',
+            coalesce(api_key, ''),
+            '|',
+            issue_fingerprint
+          ) as issue_key
+        from normalized_events
+      ),
+      status_source as (
+        select
+          team_id,
+          api_key,
+          json_extract_string(properties, '$.fingerprint') as issue_fingerprint,
+          json_extract_string(properties, '$.status') as status,
+          json_extract_string(properties, '$.actor') as status_actor,
+          json_extract_string(properties, '$.reason') as status_reason,
+          coalesce(timestamp, created_at) as status_updated_at,
+          created_at
+        from {{ events_table }}
+        where event = '$error_issue_status'
+          and source = 'hogflare'
+          and json_extract_string(properties, '$.fingerprint') is not null
+          and json_extract_string(properties, '$.status') in ('active', 'resolved', 'ignored')
+      ),
+      status_events as (
+        select
+          *,
+          concat(
+            coalesce(cast(team_id as varchar), 'null'),
+            '|',
+            coalesce(api_key, ''),
+            '|',
+            issue_fingerprint
+          ) as issue_key,
+          row_number() over (
+            partition by team_id, api_key, issue_fingerprint
+            order by status_updated_at desc, created_at desc
+          ) as status_rank
+        from status_source
+      ),
+      latest_status as (
+        select
+          issue_key,
+          status,
+          status_actor,
+          status_reason,
+          status_updated_at
+        from status_events
+        where status_rank = 1
+      )
+      select
+        issue_key,
+        team_id,
+        api_key,
+        issue_fingerprint,
+        coalesce(any_value(latest_status.status), 'active') as status,
+        any_value(latest_status.status_actor) as status_actor,
+        any_value(latest_status.status_reason) as status_reason,
+        any_value(latest_status.status_updated_at) as status_updated_at,
+        min(event_time) as first_seen_at,
+        max(event_time) as last_seen_at,
+        count(*) as event_count,
+        count(distinct identity_id) as affected_users,
+        count(distinct session_id) as affected_sessions,
+        first(exception_type order by event_time desc) as exception_type,
+        first(exception_value order by event_time desc) as exception_value,
+        first(exception_level order by event_time desc) as exception_level,
+        first(top_frame_function order by event_time desc) as top_frame_function,
+        first(top_frame_filename order by event_time desc) as top_frame_filename,
+        first(top_frame_lineno order by event_time desc) as top_frame_lineno,
+        first(current_url order by event_time desc) as latest_url,
+        first(pathname order by event_time desc) as latest_pathname,
+        first(actor_id order by event_time desc) as latest_actor_id,
+        first(uuid order by event_time desc) as latest_event_uuid
+      from scoped_events
+      left join latest_status using (issue_key)
+      group by issue_key, team_id, api_key, issue_fingerprint
+    description: Grouped PostHog error tracking issues derived from $exception events and append-only Hogflare status events.
+    primary_key: issue_key
+    default_time_dimension: last_seen_at
+    default_grain: day
+
+    relationships:
+      - name: error_events
+        type: one_to_many
+        foreign_key: issue_key
+        primary_key: issue_key
+
+    dimensions:
+      - name: issue_key
+        type: categorical
+      - name: issue_fingerprint
+        type: categorical
+      - name: team_id
+        type: categorical
+      - name: api_key
+        type: categorical
+      - name: status
+        type: categorical
+      - name: status_actor
+        type: categorical
+      - name: status_reason
+        type: categorical
+      - name: exception_type
+        type: categorical
+      - name: exception_value
+        type: categorical
+      - name: exception_level
+        type: categorical
+      - name: top_frame_function
+        type: categorical
+      - name: top_frame_filename
+        type: categorical
+      - name: top_frame_lineno
+        type: numeric
+      - name: latest_url
+        type: categorical
+      - name: latest_pathname
+        type: categorical
+      - name: latest_actor_id
+        type: categorical
+      - name: latest_event_uuid
+        type: categorical
+      - name: first_seen_at
+        type: time
+        granularity: day
+      - name: last_seen_at
+        type: time
+        granularity: day
+      - name: status_updated_at
+        type: time
+        granularity: day
+      - name: event_count
+        type: numeric
+      - name: affected_users
+        type: numeric
+      - name: affected_sessions
+        type: numeric
+
+    metrics:
+      - name: issue_count
+        agg: count
+        description: Total grouped error issues.
+      - name: active_issue_count
+        agg: count
+        filters:
+          - status = 'active'
+        description: Grouped issues that are currently active.
+      - name: resolved_issue_count
+        agg: count
+        filters:
+          - status = 'resolved'
+        description: Grouped issues marked resolved.
+      - name: ignored_issue_count
+        agg: count
+        filters:
+          - status = 'ignored'
+        description: Grouped issues marked ignored.
+      - name: total_error_events
+        agg: sum
+        sql: event_count
+        description: Total exception events across grouped issues.
+      - name: total_affected_users
+        agg: sum
+        sql: affected_users
+        description: Sum of affected users across issues.

@@ -1,0 +1,189 @@
+models:
+  - name: error_events
+    sql: |
+      with source as (
+        select
+          uuid,
+          team_id,
+          source,
+          distinct_id as actor_id,
+          coalesce(person_id, distinct_id) as identity_id,
+          person_id,
+          created_at,
+          timestamp,
+          coalesce(timestamp, created_at) as event_time,
+          properties,
+          context,
+          group0,
+          group1,
+          group2,
+          group3,
+          group4,
+          api_key,
+          coalesce(
+            json_extract_string(properties, '$.$session_id'),
+            json_extract_string(properties, '$.session_id'),
+            json_extract_string(context, '$.session_id')
+          ) as session_id,
+          coalesce(
+            json_extract_string(properties, '$.$current_url'),
+            json_extract_string(properties, '$.current_url'),
+            json_extract_string(properties, '$.url')
+          ) as current_url,
+          coalesce(
+            json_extract_string(properties, '$.$pathname'),
+            json_extract_string(properties, '$.pathname'),
+            json_extract_string(properties, '$.path')
+          ) as pathname,
+          coalesce(
+            json_extract_string(properties, '$.$browser'),
+            json_extract_string(properties, '$.browser')
+          ) as browser,
+          coalesce(
+            json_extract_string(properties, '$.$os'),
+            json_extract_string(properties, '$.os')
+          ) as os,
+          coalesce(
+            json_extract_string(properties, '$.$lib'),
+            json_extract_string(properties, '$.library')
+          ) as library,
+          coalesce(
+            json_extract_string(properties, '$.$lib_version'),
+            json_extract_string(properties, '$.library_version')
+          ) as library_version,
+          coalesce(
+            json_extract_string(properties, '$.$exception_level'),
+            json_extract_string(properties, '$.level'),
+            'error'
+          ) as exception_level,
+          json_extract_string(properties, '$.$exception_fingerprint') as explicit_fingerprint,
+          json_extract_string(properties, '$.$exception_list[0].type') as exception_type,
+          json_extract_string(properties, '$.$exception_list[0].value') as exception_value,
+          coalesce(
+            try_cast(json_extract_string(properties, '$.$exception_list[0].mechanism.handled') as boolean),
+            false
+          ) as handled,
+          json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].function') as top_frame_function,
+          json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].filename') as top_frame_filename,
+          try_cast(json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].lineno') as bigint) as top_frame_lineno,
+          try_cast(json_extract_string(properties, '$.$exception_list[0].stacktrace.frames[#-1].colno') as bigint) as top_frame_colno,
+          json_extract(properties, '$.$exception_list') as exception_list,
+          json_extract(properties, '$.$exception_steps') as exception_steps
+        from {{ events_table }}
+        where event = '$exception'
+      ),
+      normalized as (
+        select
+          *,
+          coalesce(
+            explicit_fingerprint,
+            concat(
+              coalesce(exception_type, 'Error'),
+              '|',
+              coalesce(exception_value, ''),
+              '|',
+              coalesce(top_frame_function, ''),
+              '|',
+              coalesce(top_frame_filename, ''),
+              '|',
+              coalesce(cast(top_frame_lineno as varchar), '')
+            )
+          ) as issue_fingerprint
+        from source
+      )
+      select
+        *,
+        concat(
+          coalesce(cast(team_id as varchar), 'null'),
+          '|',
+          coalesce(api_key, ''),
+          '|',
+          issue_fingerprint
+        ) as issue_key
+      from normalized
+    description: One row per PostHog $exception event with normalized exception fields.
+    primary_key: uuid
+    default_time_dimension: event_time
+    default_grain: day
+
+    relationships:
+      - name: error_issues
+        type: many_to_one
+        foreign_key: issue_key
+        primary_key: issue_key
+
+    dimensions:
+      - name: uuid
+        type: categorical
+      - name: issue_fingerprint
+        type: categorical
+      - name: issue_key
+        type: categorical
+      - name: team_id
+        type: categorical
+      - name: explicit_fingerprint
+        type: categorical
+      - name: exception_type
+        type: categorical
+      - name: exception_value
+        type: categorical
+      - name: exception_level
+        type: categorical
+      - name: handled
+        type: boolean
+      - name: actor_id
+        type: categorical
+      - name: identity_id
+        type: categorical
+      - name: person_id
+        type: categorical
+      - name: session_id
+        type: categorical
+      - name: current_url
+        type: categorical
+      - name: pathname
+        type: categorical
+      - name: browser
+        type: categorical
+      - name: os
+        type: categorical
+      - name: library
+        type: categorical
+      - name: library_version
+        type: categorical
+      - name: top_frame_function
+        type: categorical
+      - name: top_frame_filename
+        type: categorical
+      - name: top_frame_lineno
+        type: numeric
+      - name: top_frame_colno
+        type: numeric
+      - name: group0
+        type: categorical
+      - name: group1
+        type: categorical
+      - name: group2
+        type: categorical
+      - name: group3
+        type: categorical
+      - name: group4
+        type: categorical
+      - name: api_key
+        type: categorical
+      - name: event_time
+        type: time
+        granularity: day
+
+    metrics:
+      - name: error_event_count
+        agg: count
+        description: Total captured exception events.
+      - name: affected_users
+        agg: count_distinct
+        sql: identity_id
+        description: Distinct affected identities.
+      - name: affected_sessions
+        agg: count_distinct
+        sql: session_id
+        description: Distinct affected SDK sessions.

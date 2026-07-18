@@ -486,6 +486,11 @@ impl PipelineEvent {
         self
     }
 
+    pub(crate) fn as_hogflare_internal(mut self) -> Self {
+        self.source = "hogflare";
+        self
+    }
+
     pub fn with_person(
         mut self,
         person_id: Option<String>,

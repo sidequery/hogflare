@@ -61,6 +61,141 @@ async fn posthog_js_capture_is_forwarded_to_pipeline() -> Result<(), Box<dyn std
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posthog_js_capture_exception_is_forwarded_to_pipeline(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app(pipeline_endpoint).await?;
+
+    let status = Command::new("bun")
+        .arg("run")
+        .arg("posthog_exception.js")
+        .current_dir("tests/js_client")
+        .env("HOGFLARE_HOST", format!("http://{}", address))
+        .env("HOGFLARE_API_KEY", "phc_test_integration_key")
+        .env("HOGFLARE_DISTINCT_ID", "js-exception-user")
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(format!("posthog exception script exited with status {status:?}").into());
+    }
+
+    let events = wait_for_events(&mut pipeline_rx).await?;
+    let event = events
+        .iter()
+        .find(|event| event["event"] == "$exception")
+        .expect("expected $exception event in pipeline payload");
+
+    assert_eq!(event["source"], "posthog");
+    assert_eq!(event["distinct_id"], "js-exception-user");
+    assert_eq!(event["api_key"], "phc_test_integration_key");
+
+    let properties = event
+        .get("properties")
+        .and_then(Value::as_object)
+        .expect("$exception event should include properties");
+    assert_eq!(
+        properties.get("component").and_then(Value::as_str),
+        Some("checkout")
+    );
+    assert_eq!(
+        properties.get("severity").and_then(Value::as_str),
+        Some("high")
+    );
+
+    let exception = properties["$exception_list"]
+        .as_array()
+        .and_then(|exceptions| exceptions.first())
+        .and_then(Value::as_object)
+        .expect("captureException should send $exception_list");
+    assert_eq!(
+        exception.get("type").and_then(Value::as_str),
+        Some("TypeError")
+    );
+    assert_eq!(
+        exception.get("value").and_then(Value::as_str),
+        Some("checkout total was NaN")
+    );
+    assert_eq!(
+        exception["mechanism"]
+            .get("handled")
+            .and_then(Value::as_bool),
+        Some(true)
+    );
+    assert!(
+        exception["stacktrace"]["frames"]
+            .as_array()
+            .map(|frames| !frames.is_empty())
+            .unwrap_or(false),
+        "captureException should include stack frames"
+    );
+    assert!(
+        properties["$exception_steps"]
+            .as_array()
+            .map(|steps| !steps.is_empty())
+            .unwrap_or(false),
+        "exception steps should be attached when configured"
+    );
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posthog_js_auto_exception_capture_is_forwarded_to_pipeline(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app(pipeline_endpoint).await?;
+
+    let status = Command::new("bun")
+        .arg("run")
+        .arg("posthog_auto_exception.js")
+        .current_dir("tests/js_client")
+        .env("HOGFLARE_HOST", format!("http://{}", address))
+        .env("HOGFLARE_API_KEY", "phc_test_integration_key")
+        .env("HOGFLARE_DISTINCT_ID", "js-auto-exception-user")
+        .status()
+        .await?;
+
+    if !status.success() {
+        return Err(format!("posthog auto exception script exited with status {status:?}").into());
+    }
+
+    let events = wait_for_events(&mut pipeline_rx).await?;
+    let event = events
+        .iter()
+        .find(|event| event["event"] == "$exception")
+        .expect("expected auto-captured $exception event in pipeline payload");
+
+    assert_eq!(event["source"], "posthog");
+    assert_eq!(event["distinct_id"], "js-auto-exception-user");
+    assert_eq!(event["api_key"], "phc_test_integration_key");
+
+    let exception = event["properties"]["$exception_list"]
+        .as_array()
+        .and_then(|exceptions| exceptions.first())
+        .and_then(Value::as_object)
+        .expect("auto capture should send $exception_list");
+    assert_eq!(
+        exception.get("type").and_then(Value::as_str),
+        Some("RangeError")
+    );
+    assert_eq!(
+        exception.get("value").and_then(Value::as_str),
+        Some("auto captured checkout failure")
+    );
+    assert_eq!(
+        exception["mechanism"]
+            .get("handled")
+            .and_then(Value::as_bool),
+        Some(false)
+    );
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn posthog_js_pipeline_persists_events() -> Result<(), Box<dyn std::error::Error>> {
     let (pipeline_base, _pipeline_guard) = start_docker_pipeline().await?;
 

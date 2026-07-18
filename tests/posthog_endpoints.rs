@@ -135,6 +135,153 @@ async fn browser_endpoint_uses_shared_signed_payload_handling(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn posthog_error_tracking_endpoint_accepts_exception_events(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) =
+        spawn_app_with_options(pipeline_endpoint, None, None, None, None).await?;
+
+    let base_url = format!("http://{}", address);
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+    let payload = json!({
+        "token": "phc_exception_token",
+        "event": "$exception",
+        "properties": {
+            "distinct_id": "manual-exception-user",
+            "$exception_level": "error",
+            "$exception_fingerprint": "checkout-typeerror",
+            "$exception_list": [{
+                "type": "TypeError",
+                "value": "Cannot read properties of undefined",
+                "mechanism": { "handled": true, "synthetic": false },
+                "stacktrace": {
+                    "type": "raw",
+                    "frames": [{
+                        "platform": "javascript",
+                        "lang": "javascript",
+                        "function": "submitCheckout",
+                        "filename": "https://example.test/app.js",
+                        "lineno": 42,
+                        "colno": 7,
+                        "in_app": true
+                    }]
+                }
+            }]
+        }
+    });
+
+    let response = client
+        .post(format!("{}/i/v0/e/", base_url))
+        .json(&payload)
+        .send()
+        .await?;
+    assert!(response.status().is_success());
+
+    let events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event["source"], "posthog");
+    assert_eq!(event["event"], "$exception");
+    assert_eq!(event["distinct_id"], "manual-exception-user");
+    assert_eq!(event["api_key"], "phc_exception_token");
+    assert_eq!(
+        event["properties"]["$exception_fingerprint"],
+        "checkout-typeerror"
+    );
+    assert_eq!(
+        event["properties"]["$exception_list"][0]["stacktrace"]["frames"][0]["function"],
+        "submitCheckout"
+    );
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn error_issue_status_updates_are_written_to_pipeline(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let admin_token = "error-tracking-admin-token";
+    let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
+    let (address, server_handle) = spawn_app_with_options_and_debug(
+        pipeline_endpoint,
+        None,
+        None,
+        None,
+        None,
+        Some(admin_token.to_string()),
+    )
+    .await?;
+
+    let base_url = format!("http://{}", address);
+    let client = Client::builder().timeout(Duration::from_secs(5)).build()?;
+
+    let unauthenticated_response = client
+        .patch(format!(
+            "{}/errors/api/issues/{}/status",
+            base_url, "checkout-typeerror"
+        ))
+        .json(&json!({
+            "status": "resolved",
+            "api_key": "phc_status_token"
+        }))
+        .send()
+        .await?;
+    assert_eq!(unauthenticated_response.status(), StatusCode::UNAUTHORIZED);
+
+    let response = client
+        .patch(format!(
+            "{}/errors/api/issues/{}/status",
+            base_url, "checkout-typeerror"
+        ))
+        .header("x-hogflare-debug-token", admin_token)
+        .json(&json!({
+            "status": "resolved",
+            "actor": "ops@example.test",
+            "reason": "fixed in deploy 2026.07.04",
+            "api_key": "phc_status_token"
+        }))
+        .send()
+        .await?;
+    assert!(response.status().is_success());
+
+    let events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event["source"], "hogflare");
+    assert_eq!(event["event"], "$error_issue_status");
+    assert_eq!(
+        event["distinct_id"],
+        "hogflare:error_issue:checkout-typeerror"
+    );
+    assert_eq!(event["api_key"], "phc_status_token");
+    assert_eq!(event["properties"]["fingerprint"], "checkout-typeerror");
+    assert_eq!(event["properties"]["status"], "resolved");
+    assert_eq!(event["properties"]["actor"], "ops@example.test");
+    assert_eq!(event["properties"]["reason"], "fixed in deploy 2026.07.04");
+
+    let spoofed_response = client
+        .post(format!("{}/e", base_url))
+        .json(&json!({
+            "token": "phc_status_token",
+            "event": "$error_issue_status",
+            "distinct_id": "attacker",
+            "properties": {
+                "fingerprint": "checkout-typeerror",
+                "status": "ignored"
+            }
+        }))
+        .send()
+        .await?;
+    assert!(spoofed_response.status().is_success());
+    let spoofed_events = wait_for_events(&mut pipeline_rx).await?;
+    assert_eq!(spoofed_events[0]["source"], "posthog");
+    assert_eq!(spoofed_events[0]["event"], "$error_issue_status");
+
+    cleanup(server_handle, pipeline_handle).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn browser_identify_links_anon_distinct_id() -> Result<(), Box<dyn std::error::Error>> {
     let debug_token = "debug-browser-identify";
     let (pipeline_endpoint, mut pipeline_rx, pipeline_handle) = spawn_pipeline_stub().await?;
@@ -630,6 +777,18 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
     let config_body: Value = config_response.json().await?;
     assert_eq!(config_body["token"], "phc_body_token");
     assert_eq!(config_body["analytics"]["endpoint"], "/e/");
+    assert_eq!(config_body["autocaptureExceptions"], true);
+    assert_eq!(config_body["errorTracking"]["autocaptureExceptions"], true);
+    assert_eq!(
+        config_body["errorTracking"]["captureExtensionExceptions"],
+        false
+    );
+    assert_eq!(
+        config_body["errorTracking"]["suppressionRules"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
     assert_eq!(
         config_body["sessionRecording"]["endpoint"],
         "https://session.example.com"
@@ -660,6 +819,18 @@ async fn posthog_compatibility_endpoints_forward_events() -> Result<(), Box<dyn 
     let config_js = config_js_response.text().await?;
     assert!(config_js.contains("window._POSTHOG_REMOTE_CONFIG"));
     assert!(config_js.contains("phc_body_token"));
+
+    let exception_script_response = client
+        .get(format!(
+            "{}/static/1.373.4/exception-autocapture.js",
+            base_url
+        ))
+        .send()
+        .await?;
+    assert!(exception_script_response.status().is_success());
+    let exception_script = exception_script_response.text().await?;
+    assert!(exception_script.contains("errorWrappingFunctions"));
+    assert!(exception_script.contains("wrapOnError"));
 
     // session recording ingestion
     let session_payload = json!({

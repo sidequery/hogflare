@@ -17,7 +17,7 @@ use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
-    routing::{get, post},
+    routing::{get, patch, post},
     Json, Router,
 };
 use chrono::Utc;
@@ -548,6 +548,8 @@ fn router(state: AppState) -> Router {
         .route("/capture", post(capture))
         .route("/e", post(browser_capture))
         .route("/e/", post(browser_capture))
+        .route("/i/v0/e", post(browser_capture))
+        .route("/i/v0/e/", post(browser_capture))
         .route("/identify", post(identify))
         .route("/batch", post(batch))
         .route("/batch/", post(batch))
@@ -559,11 +561,23 @@ fn router(state: AppState) -> Router {
         .route("/flags/", post(flags))
         .route("/array/:token/config", get(array_config))
         .route("/array/:token/config.js", get(array_config_js))
+        .route(
+            "/static/exception-autocapture.js",
+            get(exception_autocapture_js),
+        )
+        .route(
+            "/static/:version/exception-autocapture.js",
+            get(exception_autocapture_js),
+        )
         .route("/s", post(session_recording))
         .route("/s/", post(session_recording))
         .route("/analytics", get(app_ui))
         .route("/analytics/", get(app_ui))
         .route("/analytics/api/charts", get(product_analytics))
+        .route(
+            "/errors/api/issues/:fingerprint/status",
+            patch(update_error_issue_status).post(update_error_issue_status),
+        )
         .route("/replay", get(app_ui))
         .route("/replay/", get(app_ui))
         .route("/replay/api/sessions", get(replay_sessions))
@@ -1413,10 +1427,11 @@ fn remote_config_response(state: &AppState, token: &str) -> Value {
         "captureDeadClicks": false,
         "capturePerformance": false,
         "autocapture_opt_out": false,
-        "autocaptureExceptions": false,
+        "autocaptureExceptions": true,
         "elementsChainAsString": true,
         "errorTracking": {
-            "autocaptureExceptions": false,
+            "autocaptureExceptions": true,
+            "captureExtensionExceptions": false,
             "suppressionRules": []
         },
         "logs": { "captureConsoleLogs": false },
@@ -1428,6 +1443,19 @@ fn remote_config_response(state: &AppState, token: &str) -> Value {
         "defaultIdentifiedOnly": true
     })
 }
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn exception_autocapture_js() -> impl IntoResponse {
+    (
+        [("content-type", "application/javascript; charset=utf-8")],
+        EXCEPTION_AUTOCAPTURE_JS,
+    )
+}
+
+// Keep this asset aligned with tests/js_client/bun.lock. It is the upstream browser bundle
+// served by posthog-js 1.373.4 and is redistributed under assets/vendor/POSTHOG-JS-LICENSE.
+const EXCEPTION_AUTOCAPTURE_JS: &str =
+    include_str!("../assets/vendor/posthog-exception-autocapture-1.373.4.js");
 
 fn session_recording_remote_config(state: &AppState) -> Value {
     let Some(endpoint) = state.session_recording_endpoint.as_ref() else {
@@ -1787,6 +1815,88 @@ async fn product_analytics(
         Ok(response) => Json(response).into_response(),
         Err(err) => product_analytics_error_response(err),
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct ErrorIssueStatusRequest {
+    status: String,
+    #[serde(default)]
+    actor: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    api_key: String,
+}
+
+#[cfg_attr(target_arch = "wasm32", worker::send)]
+async fn update_error_issue_status(
+    State(state): State<AppState>,
+    Path(fingerprint): Path<String>,
+    headers: HeaderMap,
+    Json(payload): Json<ErrorIssueStatusRequest>,
+) -> Result<Json<PostHogResponse>, AppError> {
+    let Some(expected_token) = state.person_debug_token.as_deref() else {
+        return Err(AppError::Unauthorized(
+            "error tracking status updates are disabled".to_string(),
+        ));
+    };
+    let provided_token = headers
+        .get("x-hogflare-debug-token")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim);
+    if provided_token != Some(expected_token) {
+        return Err(AppError::Unauthorized(
+            "invalid error tracking admin token".to_string(),
+        ));
+    }
+
+    let fingerprint = fingerprint.trim();
+    if fingerprint.is_empty() {
+        return Err(AppError::InvalidPayload(
+            "missing error issue fingerprint".to_string(),
+        ));
+    }
+
+    let status = payload.status.trim().to_ascii_lowercase();
+    if !matches!(status.as_str(), "active" | "resolved" | "ignored") {
+        return Err(AppError::InvalidPayload(format!(
+            "unsupported error issue status {status}"
+        )));
+    }
+
+    let api_key = payload.api_key.trim();
+    if api_key.is_empty() {
+        return Err(AppError::InvalidPayload(
+            "missing error issue project api_key".to_string(),
+        ));
+    }
+
+    let mut properties = serde_json::Map::new();
+    properties.insert(
+        "fingerprint".to_string(),
+        Value::String(fingerprint.to_string()),
+    );
+    properties.insert("status".to_string(), Value::String(status));
+    if let Some(actor) = payload.actor.filter(|value| !value.trim().is_empty()) {
+        properties.insert("actor".to_string(), Value::String(actor));
+    }
+    if let Some(reason) = payload.reason.filter(|value| !value.trim().is_empty()) {
+        properties.insert("reason".to_string(), Value::String(reason));
+    }
+
+    let event = PipelineEvent::from_capture(CaptureRequest {
+        api_key: Some(api_key.to_string()),
+        event: "$error_issue_status".to_string(),
+        distinct_id: format!("hogflare:error_issue:{fingerprint}"),
+        properties: Some(Value::Object(properties)),
+        timestamp: Some(Utc::now()),
+        context: None,
+        extra: HashMap::new(),
+    })
+    .as_hogflare_internal()
+    .with_team_id(state.posthog_team_id);
+
+    state.pipeline.send(vec![event]).await?;
+    Ok(Json(PostHogResponse::success()))
 }
 
 #[cfg_attr(target_arch = "wasm32", worker::send)]
