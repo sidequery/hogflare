@@ -1,7 +1,40 @@
 models:
   - name: error_issues
     sql: |
-      with relevant_events as materialized (
+      with latest_profiles as (
+        select *
+        from (
+          select
+            *,
+            row_number() over (
+              partition by team_id, api_key, person_id
+              order by updated_at desc, version desc, created_at desc
+            ) as profile_rank
+          from {{ persons_table }}
+          where person_id is not null
+        )
+        where profile_rank = 1
+      ),
+      identity_map as (
+        select
+          person_id as resolved_person_id,
+          team_id as identity_team_id,
+          api_key as identity_api_key,
+          distinct_id as linked_distinct_id
+        from (
+          select
+            *,
+            row_number() over (
+              partition by team_id, api_key, distinct_id
+              order by updated_at desc, version desc, created_at desc
+            ) as identity_rank
+          from latest_profiles,
+          unnest(distinct_ids) as identity_distinct_ids(distinct_id)
+          where distinct_id is not null
+        )
+        where identity_rank = 1
+      ),
+      relevant_events as materialized (
         select
           uuid,
           team_id,
@@ -9,11 +42,16 @@ models:
           source,
           event,
           distinct_id,
+          coalesce(identity_map.resolved_person_id, person_id, distinct_id) as identity_id,
           person_id,
           created_at,
           timestamp,
           properties
-        from {{ events_table }}
+        from {{ events_table }} as event_source
+        left join identity_map
+          on event_source.team_id is not distinct from identity_map.identity_team_id
+          and event_source.api_key is not distinct from identity_map.identity_api_key
+          and event_source.distinct_id = identity_map.linked_distinct_id
         where event in ('$exception', '$error_issue_status')
       ),
       exception_events as (
@@ -22,7 +60,7 @@ models:
           team_id,
           api_key,
           distinct_id as actor_id,
-          coalesce(person_id, distinct_id) as identity_id,
+          identity_id,
           person_id,
           coalesce(timestamp, created_at) as event_time,
           properties,

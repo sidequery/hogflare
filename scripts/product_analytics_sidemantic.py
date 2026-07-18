@@ -940,7 +940,7 @@ class SidemanticAnalytics:
         limit: int | None = None,
         skip_default_time_dimensions: bool = False,
     ) -> list[dict[str, Any]]:
-        use_preaggregations = self.config.preagg_enabled
+        use_preaggregations = self.config.preagg_enabled and self.config.preagg_refresh
         sql = self.generator.generate(
             metrics=metrics,
             dimensions=dimensions or [],
