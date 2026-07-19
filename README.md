@@ -2,7 +2,7 @@
 
 <img src="hog.png" alt="Hogflare" width="220">
 
-Hogflare is a warehouse-native PostHog alternative that runs on Cloudflare. Point existing PostHog SDKs at a Worker to capture events, resolve persons and groups, evaluate feature flags, ingest session replay, and write queryable product analytics data to R2 Data Catalog Iceberg tables.
+Hogflare is a warehouse-native PostHog alternative that runs on Cloudflare. Point existing PostHog SDKs at a Worker to capture events and exceptions, resolve persons and groups, evaluate feature flags, capture and replay session recordings, and write queryable product analytics data to R2 Data Catalog Iceberg tables.
 
 It is built for teams that want PostHog-compatible analytics primitives in their own Cloudflare lakehouse, without operating the full PostHog stack.
 
@@ -10,10 +10,12 @@ It is built for teams that want PostHog-compatible analytics primitives in their
 
 ## Product Surface
 
-- PostHog-compatible SDK endpoints: `/capture`, `/identify`, `/alias`, `/batch`, `/e`, `/engage`, `/groups`, `/s`
+- PostHog-compatible SDK endpoints: `/capture`, `/identify`, `/alias`, `/batch`, `/e`, `/i/v0/e`, `/engage`, `/groups`, `/s`
 - Stateful persons and groups: `$set`, `$set_once`, `$unset`, aliasing, group properties, group slots, and append-only person snapshots
 - Feature flags and remote config: `/array/:token/config`, `/flags`, and `/decide`
-- Session replay: PostHog replay ingestion plus an R2 SQL-backed explorer for sessions, event search, funnels, friction signals, and person journeys
+- Error tracking: manual and automatic PostHog exception capture, normalized error events, grouped issue rollups, and append-only issue status
+- Product analytics: a first-party `/analytics` dashboard backed by the repo's semantic models and incremental DuckDB pre-aggregations
+- Session replay: PostHog recording ingestion and playback plus an R2 SQL-backed explorer for sessions, event search, funnels, friction signals, and person journeys
 - Warehouse output: event rows and person snapshots in R2 Data Catalog-backed Iceberg/Parquet tables
 - Cloudflare-native enrichment: IP, geo, colo, ASN, and related request metadata
 - Backfill importer for existing PostHog persons, groups, and historical events
@@ -22,20 +24,21 @@ It is built for teams that want PostHog-compatible analytics primitives in their
 
 Hogflare includes semantic model definitions over the R2/Iceberg tables so teams can query product analytics directly from DuckDB, R2 SQL, or BI tooling:
 
-- Core facts: `events`, `sessions`, `pageviews`, `activity_days`
+- Core facts: `events`, `sessions`, `pageviews`, `activity_days`, `error_events`, `error_issues`
 - Identity and profiles: `persons`, `person_profiles`, `identity_links`
 - Product analytics: `first_event_retention`, `attribution`, `groups`
-- Reusable metrics: identification rate, pageviews per session, events per user, grouped event rate, day 1/7/30 retention, bounce rate, engagement rate, attribution rate, and identity links per profile
+- Reusable metrics: identification rate, pageviews per session, events per user, grouped event rate, day 1/7/30 retention, bounce rate, engagement rate, attribution rate, identity links per profile, captured exceptions, affected users and sessions, and issue counts by status
 
 ## What It Is Not Yet
 
-Hogflare is not a full PostHog clone. It does not try to ship PostHog's complete app surface, plugin system, cohort engine, or ClickHouse-backed query layer. The focus is PostHog SDK compatibility, product analytics data ownership, replay review, and a practical semantic layer on Cloudflare-managed storage.
+Hogflare is not a full PostHog clone. It does not try to ship PostHog's complete app surface, plugin system, cohort engine, or ClickHouse-backed query layer. The focus is PostHog SDK compatibility, product analytics data ownership, error tracking, replay review, and a practical semantic layer on Cloudflare-managed storage.
 
 ## Docs
 
 - [Deployment](docs/deployment.md): Cloudflare Pipeline setup, Wrangler config, secrets, deployment, verification, local fake pipeline, and cleanup.
+- [Product Analytics](docs/product-analytics.md): dashboard routes, warehouse configuration, semantic queries, and incremental pre-aggregation.
 - [Session Replay](docs/session-replay.md): replay ingestion, explorer UI, API routes, filters, and local demo commands.
-- [PostHog Compatibility](docs/posthog-compatibility.md): SDK setup, endpoint behavior, persons, groups, feature flags, signing, and enrichment.
+- [PostHog Compatibility](docs/posthog-compatibility.md): SDK setup, endpoint behavior, error tracking, persons, groups, feature flags, signing, and enrichment.
 - [Import Existing PostHog Data](docs/import-posthog.md): host-side backfill importer for existing PostHog projects.
 - [Data Model](docs/data-model.md): event and person row shapes plus DuckDB/R2 SQL query examples.
 - [`models/`](models): semantic model definitions for events, sessions, pageviews, persons, identity, groups, attribution, retention, error tracking, and shared metrics.
@@ -83,7 +86,7 @@ PostHog is a nice-to-use web and product analytics platform. Self-hosting PostHo
 
 A [hobby deployment of PostHog](https://github.com/PostHog/posthog/blob/master/docker-compose.hobby.yml) includes postgres, redis, redis7, clickhouse, zookeeper, kafka, worker, web, plugins, proxy, objectstorage, seaweedfs, asyncmigrationscheck, temporal, elasticsearch, temporal-admin-tools, temporal-ui, temporal-django-worker, cyclotron-janitor, capture, replay-capture, property-defs-rs, livestream, feature-flags, and cymbal.
 
-PostHog does much more than Hogflare, but many teams do not need to run PostHog's entire application stack to get useful web and product analytics. Hogflare keeps the SDK integration familiar while making Cloudflare Pipelines, R2 Data Catalog, and Iceberg the system of record.
+PostHog does much more than Hogflare, but many teams do not need to run PostHog's entire application stack to get useful web and product analytics, error tracking, and session replay. Hogflare keeps the SDK integration familiar while making Cloudflare Pipelines, R2 Data Catalog, and Iceberg the system of record.
 
 ## Local Replay Demo
 
