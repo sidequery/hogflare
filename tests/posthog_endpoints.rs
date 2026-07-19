@@ -146,6 +146,9 @@ async fn posthog_error_tracking_endpoint_accepts_exception_events(
     let payload = json!({
         "token": "phc_exception_token",
         "event": "$exception",
+        "context": {
+            "session_id": "exception-context-session"
+        },
         "properties": {
             "distinct_id": "manual-exception-user",
             "$exception_level": "error",
@@ -184,6 +187,7 @@ async fn posthog_error_tracking_endpoint_accepts_exception_events(
     assert_eq!(event["event"], "$exception");
     assert_eq!(event["distinct_id"], "manual-exception-user");
     assert_eq!(event["api_key"], "phc_exception_token");
+    assert_eq!(event["context"]["session_id"], "exception-context-session");
     assert_eq!(
         event["properties"]["$exception_fingerprint"],
         "checkout-typeerror"

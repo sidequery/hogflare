@@ -764,6 +764,8 @@ struct BrowserCaptureRequest {
     properties: Option<Value>,
     #[serde(default)]
     timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    context: Option<Value>,
     #[serde(rename = "$set")]
     #[serde(default)]
     set: Option<Value>,
@@ -830,7 +832,7 @@ async fn browser_capture(
                 distinct_id,
                 properties: payload.properties,
                 timestamp: payload.timestamp,
-                context: None,
+                context: payload.context,
                 extra: payload.extra,
             };
             PipelineEvent::from_capture(capture_req)
@@ -2312,7 +2314,7 @@ fn browser_identify_request(
         anon_distinct_id,
         properties: set,
         timestamp: payload.timestamp,
-        context: None,
+        context: payload.context,
         extra,
     }
 }
