@@ -559,7 +559,8 @@ models:
         partition_granularity: day
         refresh_key:
           every: 1 hour
-          incremental: false
+          incremental: true
+          update_window: 2 days
       - name: analytics_daily
         measures:
           - event_count
@@ -587,7 +588,8 @@ models:
         partition_granularity: month
         refresh_key:
           every: 1 hour
-          incremental: false
+          incremental: true
+          update_window: 35 days
 
     segments:
       - name: capture_events

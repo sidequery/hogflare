@@ -130,7 +130,7 @@ new_sqlite_classes = ["PersonIdCounterDurableObject", "GroupDurableObject"]
 | `HOGFLARE_REPLAY_EVENTS_TABLE` | No | Iceberg events table queried by replay APIs. Defaults to `default.hogflare_events`. |
 | `HOGFLARE_REPLAY_QUERY_LIMIT` | No | Maximum snapshot rows a replay API request can read. Defaults to `5000`. |
 | `POSTHOG_SIGNING_SECRET` | No | Enables HMAC request signature checks. |
-| `PERSON_DEBUG_TOKEN` | No | Enables `/__debug/person/:id` for deployment verification. |
+| `PERSON_DEBUG_TOKEN` | No | Enables authenticated administrative endpoints: `/__debug/person/:id` and error issue status updates. |
 | `HOGFLARE_FEATURE_FLAGS` | No | JSON flag config used by `/decide` and `/flags`. |
 
 ## Secrets

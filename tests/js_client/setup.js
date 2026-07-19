@@ -35,6 +35,7 @@ export async function setupPosthog(options = {}) {
     disable_compression: true,
     disable_session_recording: true,
     disable_surveys: true,
+    capture_exceptions: false,
     bootstrap: {
       distinctID: distinctId,
     },

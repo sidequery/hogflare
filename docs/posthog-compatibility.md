@@ -42,9 +42,23 @@ Set the SDK host/base URL to your Worker (`https://<your-worker>.workers.dev`) a
 - `/alias` creates aliases.
 - `/batch` accepts mixed event payloads.
 - `/e` accepts browser event payloads.
+- `/i/v0/e` accepts PostHog error tracking event payloads.
 - `/engage` accepts people updates.
 - `/groups` accepts `$groupidentify` payloads.
 - `/s` accepts session replay payloads.
+
+## Error Tracking
+
+PostHog SDK error tracking is supported through normal capture ingestion. `posthog.captureException(error, properties)` sends a `$exception` event with `$exception_list`, stack frames, mechanism metadata, optional `$exception_steps`, and any custom properties; Hogflare forwards those fields unchanged to the pipeline.
+
+The documented PostHog manual ingestion endpoint `/i/v0/e/` is also available and uses the same browser event normalization as `/e/`. SDK remote config advertises exception autocapture support and serves the `exception-autocapture.js` helper expected by `posthog-js`.
+
+Error tracking semantic models:
+
+- `error_events` normalizes `$exception` rows into exception type, value, stack frame, fingerprint, user, session, URL, SDK, and grouping fields.
+- `error_issues` groups exception events into issue rollups with first/last seen, event count, affected users, affected sessions, latest sample, and status.
+
+Issue status is append-only. `PATCH /errors/api/issues/:fingerprint/status` writes a trusted `$error_issue_status` event with `status` set to `active`, `resolved`, or `ignored`; `error_issues` derives the latest trusted status for that project. The request must include an `api_key` identifying the project and an `x-hogflare-debug-token` header matching `PERSON_DEBUG_TOKEN`. Status updates are disabled when that token is not configured. Client-captured events named `$error_issue_status` are retained as ordinary events but cannot change issue state.
 
 ## Persons
 

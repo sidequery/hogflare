@@ -38,7 +38,7 @@ Hogflare is not a full PostHog clone. It does not try to ship PostHog's complete
 - [PostHog Compatibility](docs/posthog-compatibility.md): SDK setup, endpoint behavior, persons, groups, feature flags, signing, and enrichment.
 - [Import Existing PostHog Data](docs/import-posthog.md): host-side backfill importer for existing PostHog projects.
 - [Data Model](docs/data-model.md): event and person row shapes plus DuckDB/R2 SQL query examples.
-- [`models/`](models): semantic model definitions for events, sessions, pageviews, persons, identity, groups, attribution, retention, and shared metrics.
+- [`models/`](models): semantic model definitions for events, sessions, pageviews, persons, identity, groups, attribution, retention, error tracking, and shared metrics.
 
 ## Architecture
 

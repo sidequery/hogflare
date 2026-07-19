@@ -16,7 +16,11 @@ Product analytics shares the same R2 Data Catalog warehouse credentials as repla
 | `HOGFLARE_ANALYTICS_MODEL_DIR` | Optional Sidemantic model directory. Defaults to `models`. |
 | `HOGFLARE_ANALYTICS_SIDEMANTIC_SCRIPT` | Optional override for the native analytics worker script. |
 | `HOGFLARE_ANALYTICS_PREAGG` | Optional Sidemantic pre-aggregation switch. Defaults to enabled. Set to `0` to disable. |
+| `HOGFLARE_ANALYTICS_PREAGG_REFRESH` | Optional materialization switch. Defaults to enabled. Set to `0` to query the source models without building local rollups. |
 | `HOGFLARE_ANALYTICS_PREAGG_SCHEMA` | Optional DuckDB schema for Sidemantic rollup tables. Defaults to `sidemantic_preagg`. |
+| `HOGFLARE_ANALYTICS_PREAGG_DATABASE` | Optional local DuckDB path used to persist pre-aggregation partitions across worker restarts. Defaults to an account-and-bucket-specific file under `/tmp`. |
+| `HOGFLARE_ANALYTICS_PREAGG_REFRESH_INTERVAL_SECONDS` | Optional bounded refresh cadence. Defaults to `3600` seconds. |
+| `HOGFLARE_ANALYTICS_PREAGG_FULL_REFRESH_INTERVAL_SECONDS` | Optional full reconciliation cadence for historical backfills. Defaults to `86400` seconds. |
 
 ## Routes
 
@@ -25,4 +29,4 @@ Product analytics shares the same R2 Data Catalog warehouse credentials as repla
 - `/analytics/api/charts` returns overview metrics, a focused trend, and semantic breakdowns including domains, referrers, browser, country, region, and city leaderboards.
 - `/replay` serves the replay feature.
 
-At worker startup, Sidemantic materializes known count-based chart shapes into daily pre-aggregation rollups and automatically routes eligible queries through those tables. `metric`, `dimension`, and `granularity` choose the focused chart. `semantic_filters` carries clickable cross-filter state as a JSON object of semantic dimensions to values. Analytics leaderboards use a fixed top-10 row cap plus an Others row.
+At worker startup, Sidemantic bootstraps the complete history for known count-based chart shapes. It then refreshes recent day or month partitions on the configured cadence and, by default, performs a persisted full reconciliation daily so historical backfills and offline events cannot remain stale indefinitely. The local DuckDB file preserves partitions and the reconciliation watermark across worker restarts. `metric`, `dimension`, and `granularity` choose the focused chart. `semantic_filters` carries clickable cross-filter state as a JSON object of semantic dimensions to values. Analytics leaderboards use a fixed top-10 row cap plus an Others row.
