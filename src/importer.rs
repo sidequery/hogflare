@@ -1907,19 +1907,22 @@ impl Importer {
                 }
             }
 
+            let events = self.filter_existing(events).await?;
+            let projected_events = self.summary.events + events.len();
+            let requires_cursor = event_page_requires_cursor(
+                count,
+                limit,
+                self.next_limit(self.config.max_events, projected_events),
+            );
+            let next_cursor = validated_event_page_cursor(requires_cursor, next_cursor)?;
+
             let previous_events = self.summary.events;
-            let sent = self.send(events).await?;
+            let sent = self.send_filtered(events).await?;
             self.summary.events += sent;
             if previous_events / PROGRESS_INTERVAL < self.summary.events / PROGRESS_INTERVAL {
                 eprintln!("PostHog import progress: events={}", self.summary.events);
             }
 
-            let requires_cursor = event_page_requires_cursor(
-                count,
-                limit,
-                self.next_limit(self.config.max_events, self.summary.events),
-            );
-            let next_cursor = validated_event_page_cursor(requires_cursor, next_cursor)?;
             if !requires_cursor {
                 break;
             }
@@ -2048,6 +2051,10 @@ impl Importer {
 
     async fn send(&mut self, items: Vec<ImportBatchItem>) -> Result<usize, ImportError> {
         let items = self.filter_existing(items).await?;
+        self.send_filtered(items).await
+    }
+
+    async fn send_filtered(&mut self, items: Vec<ImportBatchItem>) -> Result<usize, ImportError> {
         if items.is_empty() {
             return Ok(0);
         }
